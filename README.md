@@ -70,7 +70,7 @@ Run `npm run build:unpacked` to package the app into `release/win-unpacked`, or 
 2. After changes merge to `main` and CI passes, Changesets opens or updates **Version Ringward** with the version bump, lockfile, and [changelog](CHANGELOG.md). Review and merge it through the usual branch protection checks.
 3. The version bump on `main` triggers a Windows build. After it passes, GitHub Actions creates the tag and publishes the unpacked ZIP, SHA-256 checksum, and release notes from the changelog. The 0.x builds are development previews.
 
-The version PR requires **Allow GitHub Actions to create and approve pull requests** under **Settings → Actions → General → Workflow permissions**. Ringward's workflow creates the PR and leaves review and merge to maintainers. GitHub may require a maintainer to approve workflow runs on bot-created PRs. [Changesets automation](https://changesets.dev/guide/automating-changesets), [GitHub token behavior](https://docs.github.com/en/actions/concepts/security/github_token)
+The version PR requires **Allow GitHub Actions to create and approve pull requests** under **Settings → Actions → General → Workflow permissions**. Ringward's workflow creates the PR and leaves review and merge to maintainers. GitHub may require a maintainer to approve workflow runs on bot-created PRs. [Changesets automation](https://github.com/changesets/changesets/blob/main/docs/automating-changesets.md), [GitHub token behavior](https://docs.github.com/en/actions/concepts/security/github_token)
 
 ## Credits
 
