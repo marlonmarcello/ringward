@@ -1,0 +1,50 @@
+{
+  "name": "ringward",
+  "version": "0.1.12",
+  "description": "Elden Ring mod manager for ME3",
+  "homepage": "https://github.com/marlonmarcello/ringward",
+  "repository": "github:marlonmarcello/ringward",
+  "author": "Ringward contributors",
+  "main": "src/main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "build:merge": "node scripts/build-merge.cjs",
+    "build:unpacked": "npm run build:merge && electron-builder --win --dir",
+    "build": "npm run build:merge && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "app.ringward.manager",
+    "productName": "Ringward",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**",
+      "!src/ui/assets/{main,character-preset,reshade-preset,save-backup}.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".tools/merge",
+        "to": "merge"
+      }
+    ],
+    "win": {
+      "icon": "src/ui/assets/icon.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false
+    }
+  }
+}

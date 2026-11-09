@@ -1,0 +1,12 @@
+node_modules/
+release/
+.tools/
+merge/bin/
+merge/obj/
+.env
+.env.*
+*.sl2
+*.sl2.bak
+*.co2
+*.co2.bak
+*.pfx
