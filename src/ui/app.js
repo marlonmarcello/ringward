@@ -805,7 +805,7 @@ const actions = {
     const item = state.backups.find(backup => backup.id === id);
     return confirm('Delete backup?', 'Delete “' + (item.name || item.reason) + '”? This permanently removes the snapshot.',
       'Delete backup', () => app.invoke('saves:delete', id),
-      result => result?.remaining ? 'Backup removed from the list. Windows could not clear all files in ' + result.remaining : 'Backup deleted.');
+      result => result?.remaining ? 'Backup removed from the list. Ringward will retry cleanup on startup for ' + result.remaining : 'Backup deleted.');
   },
   'backup-restore': id => confirm('Restore this backup?', 'Ringward will back up all current saves in a Before restore snapshot, then restore the selected files.',
     'Restore and back up', () => app.invoke('saves:restore', id),

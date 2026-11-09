@@ -38,6 +38,16 @@ const VANILLA = 'vanilla';
 const vanillaProfile = () => ({ id: VANILLA, name: 'Vanilla', mods: [], isolated: false, autoBackup: false, diagnostics: false, immutable: true });
 const assetPath = (root, file) => path.join(root, ...file.split('/'));
 const stamp = () => new Date().toISOString();
+const BACKUP_ID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
+
+async function backupDirectoryExists(folder) {
+  const entry = await fs.lstat(folder).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+  if (!entry) return false;
+  if (!entry.isDirectory()) throw new Error('This backup path is not a regular folder.');
+  return true;
+}
 
 function modEntry(mod) {
   const root = mod.suggested ?? (mod.candidates.length === 1 ? mod.candidates[0] : null);
@@ -138,6 +148,7 @@ class Manager {
       };
       await this.commit(this.state);
     }
+    await this.retryBackupDeletions().catch(() => {});
   }
 
   at(...parts) { return path.join(this.root, ...parts); }
@@ -774,12 +785,15 @@ class Manager {
     const files = subset || await saveFiles(root);
     if (!files.length) return null;
     const backup = { id: id(), time: stamp(), reason, profile: profileId, files };
-    const dest = this.at('backups', backup.id);
+    await fs.mkdir(this.at('backups'), { recursive: true });
+    const dest = path.join(await this.backupRoot(), backup.id);
+    await fs.mkdir(dest);
     try {
       for (const relative of files) {
+        const source = await assertSaveTarget(root, relative);
         const output = assetPath(dest, relative);
         await fs.mkdir(path.dirname(output), { recursive: true });
-        await fs.copyFile(await assertSaveTarget(root, relative), output);
+        await fs.copyFile(source, output);
       }
       await this.update(state => { state.backups.unshift(backup); });
       return backup;
@@ -796,28 +810,22 @@ class Manager {
 
   backupRecord(backupId) {
     const backup = this.state.backups.find(item => item.id === backupId);
-    if (!backup || !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(backup.id)) {
+    if (!backup || !BACKUP_ID.test(backup.id)) {
       throw new Error('This backup is unavailable.');
     }
     return backup;
   }
 
+  backupRoot() {
+    return fs.realpath(this.at('backups'));
+  }
+
   async backupFolder(backupId) {
     const { id } = this.backupRecord(backupId);
-    const root = await fs.realpath(this.at('backups'));
-    if (path.relative(await fs.realpath(this.root), root).toLowerCase() !== 'backups') {
-      throw new Error('Ringward’s backups folder is redirected.');
-    }
-    const folder = path.join(root, id);
+    const folder = path.join(await this.backupRoot(), id);
     // A backup parked by an interrupted delete is still usable while it is listed.
-    for (const candidate of [folder, folder + '.deleting']) {
-      const info = await fs.lstat(candidate).catch(error => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-      if (!info) continue;
-      if (!info.isDirectory()) throw new Error('This backup path is not a regular folder.');
-      return candidate;
-    }
+    if (await backupDirectoryExists(folder)) return folder;
+    if (await backupDirectoryExists(folder + '.deleting')) return folder + '.deleting';
     return folder;
   }
 
@@ -836,28 +844,69 @@ class Manager {
     await this.update(state => { state.backups.find(item => item.id === backupId).name = cleanName(value); });
   }
 
-  async deleteBackup(backupId) {
-    const folder = await this.backupFolder(backupId);
-    const original = path.join(path.dirname(folder), backupId);
-    const parked = original + '.deleting';
-    if (folder === original) {
-      await fs.rename(original, parked).catch(error => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-    }
-    try {
-      await this.update(state => { state.backups = state.backups.filter(item => item.id !== backupId); });
-    } catch (error) {
-      if (folder === original) {
-        await fs.rename(parked, original).catch(recovery => {
-          if (recovery.code !== 'ENOENT') throw recovery;
-        });
+  async protectSaveFolder(...folders) {
+    const configured = this.state.settings.saves;
+    if (!configured) return;
+    const configuredPath = path.resolve(configured);
+    const resolved = await fs.realpath(configured).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+      return configuredPath;
+    });
+    for (const folder of folders) {
+      if ([configuredPath, resolved].some(savePath => {
+        const relative = path.relative(folder, savePath);
+        return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
+      })) {
+        throw new Error('This backup contains the configured save folder. Choose a different save folder before deleting it.');
       }
+    }
+  }
+
+  async retryBackupDeletions() {
+    const pending = this.state.pendingBackupDeletions;
+    if (!pending?.length) return;
+    const root = await this.backupRoot();
+    const remaining = [];
+    for (const item of pending) {
+      // If storage was redirected again, wait until the original location is available.
+      if (path.relative(root, item.root) || !BACKUP_ID.test(item.id) || this.state.backups.some(backup => backup.id === item.id)) {
+        remaining.push(item);
+        continue;
+      }
+      const parked = path.join(root, item.id + '.deleting');
+      try {
+        if (await backupDirectoryExists(parked)) {
+          await this.protectSaveFolder(parked);
+          await fs.rm(parked, { recursive: true, force: true, maxRetries: 3 });
+        }
+      } catch {
+        remaining.push(item);
+      }
+    }
+    if (remaining.length !== pending.length) await this.update(state => { state.pendingBackupDeletions = remaining; });
+  }
+
+  async deleteBackup(backupId) {
+    this.backupRecord(backupId);
+    const root = await this.backupRoot();
+    const original = path.join(root, backupId);
+    const parked = original + '.deleting';
+    await this.protectSaveFolder(original, parked);
+    const present = await backupDirectoryExists(original);
+    const alreadyParked = await backupDirectoryExists(parked);
+    if (present && alreadyParked) throw new Error('Two folders were found for this backup. Resolve the duplicate before deleting it.');
+    if (present) await fs.rename(original, parked);
+    try {
+      await this.update(state => {
+        state.backups = state.backups.filter(item => item.id !== backupId);
+        if (present || alreadyParked) (state.pendingBackupDeletions ??= []).push({ id: backupId, root });
+      });
+    } catch (error) {
+      if (present) await fs.rename(parked, original);
       throw error;
     }
-    try {
-      await fs.rm(parked, { recursive: true, force: true, maxRetries: 3 });
-    } catch {
+    await this.retryBackupDeletions().catch(() => {});
+    if (this.state.pendingBackupDeletions?.some(item => item.id === backupId)) {
       return { remaining: parked };
     }
   }
@@ -876,6 +925,7 @@ class Manager {
       return { relative, source, target: await assertSaveTarget(root, current) };
     }));
     const rollback = await this.makeBackup('Before restore', this.state.active, [...live.values()]);
+    const rollbackFolder = rollback && await this.backupFolder(rollback.id);
     await this.assertClosed();
     const written = [];
     try {
@@ -889,7 +939,7 @@ class Manager {
       const recoveries = await Promise.allSettled(written.map(async ({ relative, target }) => {
         const original = live.get(relative.toLowerCase());
         if (original) {
-          const data = await fs.readFile(assetPath(this.at('backups', rollback.id), original));
+          const data = await fs.readFile(assetPath(rollbackFolder, original));
           await atomicWrite(target, data);
         } else {
           await fs.rm(target);

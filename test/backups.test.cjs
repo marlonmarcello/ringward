@@ -5,6 +5,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { Manager } = require('../src/manager.cjs');
 
+const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
+const mainSave = '76561198000000001/ER0000.sl2';
+
 async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ringward-backups-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -70,4 +73,67 @@ test('renaming and deleting a backup leaves live saves intact', async t => {
   assert.deepEqual(manager.snapshot().backups, []);
   await assert.rejects(fs.access(folder + '.deleting'), { code: 'ENOENT' });
   assert.equal(await fs.readFile(path.join(saves, relative), 'utf8'), 'live');
+});
+
+test('deletion protects a backup that contains the configured save folder', async t => {
+  const { manager, saves } = await setup(t);
+  await writeSave(saves, mainSave, 'protected');
+  const backup = await manager.makeBackup('Manual', manager.state.active);
+  const folder = await manager.backupFolder(backup.id);
+  const alias = path.join(path.dirname(saves), 'save-alias');
+  await fs.symlink(folder, alias, directoryLink);
+
+  for (const target of [folder, path.dirname(path.join(folder, mainSave)), alias]) {
+    await manager.setSetting('saves', target);
+    await assert.rejects(manager.deleteBackup(backup.id), /contains the configured save folder/);
+    assert.equal(await fs.readFile(path.join(folder, mainSave), 'utf8'), 'protected');
+    assert.equal(manager.snapshot().backups.length, 1);
+  }
+});
+
+test('startup retries a delete that could not finish after the index was committed', async t => {
+  const { manager, saves } = await setup(t);
+  await writeSave(saves, mainSave, 'live');
+  const backup = await manager.makeBackup('Manual', manager.state.active);
+  const parked = (await manager.backupFolder(backup.id)) + '.deleting';
+  const remove = fs.rm;
+  const locked = t.mock.method(fs, 'rm', (file, options) => {
+    if (file === parked) throw new Error('Windows still has the folder open');
+    return remove(file, options);
+  });
+  assert.deepEqual(await manager.deleteBackup(backup.id), { remaining: parked });
+  locked.mock.restore();
+  assert.deepEqual(manager.snapshot().backups, []);
+
+  // The cleanup must respect a save folder selected after the initial delete attempt.
+  await manager.setSetting('saves', parked);
+  const reopened = new Manager(manager.root);
+  await reopened.init({});
+  assert.equal(await fs.readFile(path.join(parked, mainSave), 'utf8'), 'live');
+  await reopened.setSetting('saves', saves);
+  await reopened.init({});
+  await assert.rejects(fs.access(parked), { code: 'ENOENT' });
+  assert.deepEqual(reopened.state.pendingBackupDeletions, []);
+  assert.equal(await fs.readFile(path.join(saves, mainSave), 'utf8'), 'live');
+});
+
+test('redirected backup storage supports existing snapshots and new backups', async t => {
+  const { manager, saves } = await setup(t);
+  await writeSave(saves, mainSave, 'older');
+  const first = await manager.makeBackup('Manual', manager.state.active);
+  const storage = manager.at('backups');
+  const redirected = path.join(path.dirname(saves), 'redirected');
+  await fs.rename(storage, redirected);
+  await fs.symlink(redirected, storage, directoryLink);
+
+  const folder = path.join(await fs.realpath(redirected), first.id);
+  assert.equal(await manager.backupFolder(first.id), folder);
+  await writeSave(saves, mainSave, 'current');
+  assert.deepEqual(await manager.restore(first.id), { preserved: true });
+  assert.equal(await fs.readFile(path.join(saves, mainSave), 'utf8'), 'older');
+  const preserved = await manager.backupFolder(manager.snapshot().backups[0].id);
+  assert.equal(await fs.readFile(path.join(preserved, mainSave), 'utf8'), 'current');
+  await manager.deleteBackup(first.id);
+  await assert.rejects(fs.access(folder), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(preserved, mainSave), 'utf8'), 'current');
 });
