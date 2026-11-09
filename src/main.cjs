@@ -138,6 +138,9 @@ function registerActions() {
   });
   register('saves:backup', () => manager.backup(), true);
   register('saves:restore', id => manager.restore(id), true);
+  register('saves:rename', (id, name) => manager.renameBackup(id, name), true);
+  register('saves:delete', id => manager.deleteBackup(id), true);
+  register('saves:folder', async id => reveal(await manager.backupFolder(id)));
   register('merge:review', id => manager.review(id), true);
   register('merge:build', async (id, approval) => {
     const result = await manager.buildRegulation(id, approval);
@@ -201,9 +204,9 @@ function registerActions() {
     if (!url) throw new Error('Unknown external link.');
     return shell.openExternal(url);
   });
-  register('open:data', key => {
+  register('open:data', async key => {
     if (key === 'library' || key === 'backups') return reveal(manager.at(key));
-    if (key === 'saves') return reveal(manager.state.settings.saves);
+    if (key === 'saves') return reveal(await manager.mainSaveFolder());
     throw new Error('Unknown folder.');
   });
 }

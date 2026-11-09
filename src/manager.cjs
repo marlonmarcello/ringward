@@ -38,6 +38,16 @@ const VANILLA = 'vanilla';
 const vanillaProfile = () => ({ id: VANILLA, name: 'Vanilla', mods: [], isolated: false, autoBackup: false, diagnostics: false, immutable: true });
 const assetPath = (root, file) => path.join(root, ...file.split('/'));
 const stamp = () => new Date().toISOString();
+const BACKUP_ID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
+
+async function backupDirectoryExists(folder) {
+  const entry = await fs.lstat(folder).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+  if (!entry) return false;
+  if (!entry.isDirectory()) throw new Error('This backup path is not a regular folder.');
+  return true;
+}
 
 function modEntry(mod) {
   const root = mod.suggested ?? (mod.candidates.length === 1 ? mod.candidates[0] : null);
@@ -138,6 +148,7 @@ class Manager {
       };
       await this.commit(this.state);
     }
+    await this.retryBackupDeletions().catch(() => {});
   }
 
   at(...parts) { return path.join(this.root, ...parts); }
@@ -774,12 +785,15 @@ class Manager {
     const files = subset || await saveFiles(root);
     if (!files.length) return null;
     const backup = { id: id(), time: stamp(), reason, profile: profileId, files };
-    const dest = this.at('backups', backup.id);
+    await fs.mkdir(this.at('backups'), { recursive: true });
+    const dest = path.join(await this.backupRoot(), backup.id);
+    await fs.mkdir(dest);
     try {
       for (const relative of files) {
+        const source = await assertSaveTarget(root, relative);
         const output = assetPath(dest, relative);
         await fs.mkdir(path.dirname(output), { recursive: true });
-        await fs.copyFile(await assertSaveTarget(root, relative), output);
+        await fs.copyFile(source, output);
       }
       await this.update(state => { state.backups.unshift(backup); });
       return backup;
@@ -794,20 +808,125 @@ class Manager {
     if (!await this.makeBackup('Manual', this.state.active)) throw new Error('No Elden Ring saves were found in the configured folder.');
   }
 
+  backupRecord(backupId) {
+    const backup = this.state.backups.find(item => item.id === backupId);
+    if (!backup || !BACKUP_ID.test(backup.id)) {
+      throw new Error('This backup is unavailable.');
+    }
+    return backup;
+  }
+
+  backupRoot() {
+    return fs.realpath(this.at('backups'));
+  }
+
+  async backupFolder(backupId) {
+    const { id } = this.backupRecord(backupId);
+    const folder = path.join(await this.backupRoot(), id);
+    // A backup parked by an interrupted delete is still usable while it is listed.
+    if (await backupDirectoryExists(folder)) return folder;
+    if (await backupDirectoryExists(folder + '.deleting')) return folder + '.deleting';
+    return folder;
+  }
+
+  async mainSaveFolder() {
+    const root = this.state.settings.saves;
+    if (!root) throw new Error('Choose the Elden Ring save folder in Settings.');
+    const saves = await saveFiles(root);
+    const main = saves.filter(file => /^ER0000\.sl2$/i.test(path.posix.basename(file)));
+    const accounts = new Set((main.length ? main : saves).map(file => path.posix.dirname(file)));
+    return accounts.size === 1 ? path.join(root, accounts.values().next().value) : root;
+  }
+
+  async renameBackup(backupId, value) {
+    this.backupRecord(backupId);
+    if (typeof value !== 'string' || !value.trim()) throw new Error('Enter a backup name.');
+    await this.update(state => { state.backups.find(item => item.id === backupId).name = cleanName(value); });
+  }
+
+  async protectSaveFolder(...folders) {
+    const configured = this.state.settings.saves;
+    if (!configured) return;
+    const configuredPath = path.resolve(configured);
+    const resolved = await fs.realpath(configured).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+      return configuredPath;
+    });
+    for (const folder of folders) {
+      if ([configuredPath, resolved].some(savePath => {
+        const relative = path.relative(folder, savePath);
+        return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
+      })) {
+        throw new Error('This backup contains the configured save folder. Choose a different save folder before deleting it.');
+      }
+    }
+  }
+
+  async retryBackupDeletions() {
+    const pending = this.state.pendingBackupDeletions;
+    if (!pending?.length) return;
+    const root = await this.backupRoot();
+    const remaining = [];
+    for (const item of pending) {
+      // If storage was redirected again, wait until the original location is available.
+      if (path.relative(root, item.root) || !BACKUP_ID.test(item.id) || this.state.backups.some(backup => backup.id === item.id)) {
+        remaining.push(item);
+        continue;
+      }
+      const parked = path.join(root, item.id + '.deleting');
+      try {
+        if (await backupDirectoryExists(parked)) {
+          await this.protectSaveFolder(parked);
+          await fs.rm(parked, { recursive: true, force: true, maxRetries: 3 });
+        }
+      } catch {
+        remaining.push(item);
+      }
+    }
+    if (remaining.length !== pending.length) await this.update(state => { state.pendingBackupDeletions = remaining; });
+  }
+
+  async deleteBackup(backupId) {
+    this.backupRecord(backupId);
+    const root = await this.backupRoot();
+    const original = path.join(root, backupId);
+    const parked = original + '.deleting';
+    await this.protectSaveFolder(original, parked);
+    const present = await backupDirectoryExists(original);
+    const alreadyParked = await backupDirectoryExists(parked);
+    if (present && alreadyParked) throw new Error('Two folders were found for this backup. Resolve the duplicate before deleting it.');
+    if (present) await fs.rename(original, parked);
+    try {
+      await this.update(state => {
+        state.backups = state.backups.filter(item => item.id !== backupId);
+        if (present || alreadyParked) (state.pendingBackupDeletions ??= []).push({ id: backupId, root });
+      });
+    } catch (error) {
+      if (present) await fs.rename(parked, original);
+      throw error;
+    }
+    await this.retryBackupDeletions().catch(() => {});
+    if (this.state.pendingBackupDeletions?.some(item => item.id === backupId)) {
+      return { remaining: parked };
+    }
+  }
+
   async restore(backupId) {
     await this.assertClosed();
-    const backup = this.state.backups.find(item => item.id === backupId);
-    if (!backup) throw new Error('This backup is unavailable.');
+    const backup = this.backupRecord(backupId);
+    const folder = await this.backupFolder(backupId);
     const root = this.state.settings.saves;
     if (!root) throw new Error('Choose the Elden Ring save folder in Settings.');
     const live = new Map((await saveFiles(root)).map(file => [file.toLowerCase(), file]));
-    const existing = backup.files.map(file => live.get(file.toLowerCase())).filter(Boolean);
     const targets = await Promise.all(backup.files.map(async relative => {
-      const source = assetPath(this.at('backups', backup.id), relative);
+      const source = await assertSaveTarget(folder, relative);
       if (!await exists(source)) throw new Error('A file is missing from this backup.');
-      return { relative, source, target: await assertSaveTarget(root, relative) };
+      const current = live.get(relative.toLowerCase()) ?? relative;
+      return { relative, source, target: await assertSaveTarget(root, current) };
     }));
-    const rollback = await this.makeBackup('Before restore', this.state.active, existing);
+    const rollback = await this.makeBackup('Before restore', this.state.active, [...live.values()]);
+    const rollbackFolder = rollback && await this.backupFolder(rollback.id);
+    await this.assertClosed();
     const written = [];
     try {
       for (const { relative, source, target } of targets) {
@@ -820,7 +939,7 @@ class Manager {
       const recoveries = await Promise.allSettled(written.map(async ({ relative, target }) => {
         const original = live.get(relative.toLowerCase());
         if (original) {
-          const data = await fs.readFile(assetPath(this.at('backups', rollback.id), original));
+          const data = await fs.readFile(assetPath(rollbackFolder, original));
           await atomicWrite(target, data);
         } else {
           await fs.rm(target);
@@ -829,6 +948,7 @@ class Manager {
       if (recoveries.some(item => item.status === 'rejected')) throw new Error('Restore was interrupted. A before-restore backup is available.');
       throw error;
     }
+    return { preserved: Boolean(rollback) };
   }
 
   async merge(plan, output = null, approval = '') {

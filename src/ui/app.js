@@ -382,16 +382,27 @@ function nexus() {
 function saves() {
   const rows = state.backups.map(item => {
     const owner = state.profiles.find(p => p.id === item.profile);
-    return '<div class="row">' + icon('save') + '<div class="item"><strong>' + html(item.reason) + ' · ' +
-      html(new Date(item.time).toLocaleString()) + '</strong><small>' + item.count + ' files across Steam save folders' +
-      (owner ? ' · ' + html(owner.name) : '') + '</small></div>' + button('backup-restore', 'Restore', '', data(item.id)) + '</div>';
+    const detail = [new Date(item.time).toLocaleString(), number(item.count) + (item.count === 1 ? ' file' : ' files'),
+      item.name && item.name !== item.reason ? item.reason : '', owner?.name].filter(Boolean).map(html).join(' · ');
+    return '<div class="row">' + icon('save') + '<div class="item"><strong>' + html(item.name || item.reason) +
+      '</strong><small>' + detail + '</small></div><div class="actions">' +
+      button('backup-restore', 'Restore', '', data(item.id)) + button('backup-manage', 'Manage', '', data(item.id)) + '</div></div>';
   }).join('');
   return '<div class="narrow">' + title('Saves', 'Save backups', 'Take a snapshot of local Elden Ring saves and restore an earlier copy when the game is closed.') +
+    '<div class="actions save-folders">' + button('open-data', 'Open main save folder', '', data('saves')) +
+    button('open-data', 'Open backups folder', 'subtle', data('backups')) + '</div>' +
     panel('Snapshots', 'Automatic backups are controlled per profile.', rows ||
       '<div class="empty"><h3>No backups yet</h3><p>Create a snapshot before trying a new loadout.</p></div>',
-      button('backup', icon('plus') + ' Back up now', 'primary')) +
-    '<div class="metric">' + button('open-data', 'Open backups folder', 'text', data('backups')) + ' · ' +
-    button('open-data', 'Open live saves', 'text', data('saves')) + '</div></div>';
+      button('backup', icon('plus') + ' Back up now', 'primary')) + '</div>';
+}
+
+function manageBackup(id) {
+  const item = state.backups.find(backup => backup.id === id);
+  dialog('Manage backup', '<label class="field">Backup name<input name="name" maxlength="120" required value="' +
+    html(item.name || item.reason) + '"></label><div class="actions metric">' +
+    button('backup-folder', 'Open backup folder', '', data(id)) +
+    button('backup-delete', 'Delete backup', 'danger subtle', data(id)) + '</div>',
+  'Save name', form => perform(() => app.invoke('saves:rename', id, form.get('name')), 'Backup renamed.'));
 }
 
 function settings() {
@@ -788,8 +799,17 @@ const actions = {
   'open-data': id => perform(() => app.invoke('open:data', id)),
   'open-external': id => perform(() => app.invoke('open:external', id)),
   backup: () => perform(() => app.invoke('saves:backup'), 'Save backup created.'),
-  'backup-restore': id => confirm('Restore this backup?', 'Ringward will replace matching save files and make a safety copy of any files it overwrites.',
-    'Restore saves', () => app.invoke('saves:restore', id), 'Save backup restored.'),
+  'backup-manage': manageBackup,
+  'backup-folder': id => perform(() => app.invoke('saves:folder', id)),
+  'backup-delete': id => {
+    const item = state.backups.find(backup => backup.id === id);
+    return confirm('Delete backup?', 'Delete “' + (item.name || item.reason) + '”? This permanently removes the snapshot.',
+      'Delete backup', () => app.invoke('saves:delete', id),
+      result => result?.remaining ? 'Backup removed from the list. Ringward will retry cleanup on startup for ' + result.remaining : 'Backup deleted.');
+  },
+  'backup-restore': id => confirm('Restore this backup?', 'Ringward will back up all current saves in a Before restore snapshot, then restore the selected files.',
+    'Restore and back up', () => app.invoke('saves:restore', id),
+    result => result.preserved ? 'Backup restored. Your previous saves are in Before restore.' : 'Backup restored.'),
   'merge-review': async () => {
     if (!state.tools.smithbox) {
       navigate('settings');
