@@ -16,7 +16,7 @@
 
 | Feature | What you can do |
 | --- | --- |
-| **Profiles and load order** | Keep separate loadouts, drag mods to reorder them, and search or filter by enabled status. The built-in **Vanilla** profile is always available. |
+| **Profiles and load order** | Keep separate loadouts, reorder mods by dragging or entering a position, and search or filter by enabled status. The built-in **Vanilla** profile is always available. |
 | **Mod library** | Import ZIP, supported 7z or RAR archives, and extracted folders. Ringward detects asset roots, flags unknown layouts, and checks for duplicate files and content. |
 | **Regulation automation** | Combine `regulation.bin` files and Smithbox CSV patches using Smithbox definitions. Review competing edits, then let load order resolve the approved conflicts. Build a standalone file or have Ringward build it at launch. |
 | **Character presets** | Paste or import JSON from **Elden Sliders** and **Elden Bling Sliders**. Add, replace, or remove entries in the selected save’s in-game Favorites. Ringward backs up the save before each edit. |
@@ -66,7 +66,11 @@ Run `npm run build:unpacked` to package the app into `release/win-unpacked`, or 
 
 ### Publishing a release
 
-GitHub Actions tests and builds pushes to `main` and pull requests. To release, update the version in `package.json` and its lockfile together, and add a matching version section to [CHANGELOG.md](CHANGELOG.md). Merge the changes, then create and push the matching `vX.Y.Z` tag from `main`. CI checks the version, builds the Windows ZIP, and publishes it with a SHA-256 checksum and the matching changelog entry. The 0.x builds are development previews.
+1. Run `npm run changeset` on a feature branch and include the resulting note in the PR. Pick the version bump and describe the change from a user's perspective.
+2. After changes merge to `main` and CI passes, Changesets opens or updates **Version Ringward** with the version bump, lockfile, and [changelog](CHANGELOG.md). Review and merge it through the usual branch protection checks.
+3. The version bump on `main` triggers a Windows build. After it passes, GitHub Actions creates the tag and publishes the unpacked ZIP, SHA-256 checksum, and release notes from the changelog. The 0.x builds are development previews.
+
+The version PR requires **Allow GitHub Actions to create and approve pull requests** under **Settings → Actions → General → Workflow permissions**. Ringward's workflow creates the PR and leaves review and merge to maintainers. GitHub may require a maintainer to approve workflow runs on bot-created PRs. [Changesets automation](https://changesets.dev/guide/automating-changesets), [GitHub token behavior](https://docs.github.com/en/actions/concepts/security/github_token)
 
 ## Credits
 

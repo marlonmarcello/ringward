@@ -296,6 +296,14 @@ class Manager {
           [profile.mods[index], profile.mods[target]] = [profile.mods[target], profile.mods[index]];
         }
       }
+      if (data.action === 'position') {
+        const position = data.position;
+        if (!Number.isInteger(position) || position < 1 || position > profile.mods.length) {
+          throw new Error('Choose a position from 1 to ' + profile.mods.length + '.');
+        }
+        profile.mods.splice(index, 1);
+        profile.mods.splice(position - 1, 0, entry);
+      }
       if (data.action === 'reorder' && data.targetId !== entry.id) {
         const target = profile.mods.findIndex(item => item.id === data.targetId);
         if (target < 0) throw new Error('The destination mod is no longer in this profile.');
@@ -587,7 +595,8 @@ class Manager {
     const regulations = [];
     const natives = [];
     const incomplete = [];
-    for (const entry of profile.mods.filter(item => item.enabled)) {
+    for (const [index, entry] of profile.mods.entries()) {
+      if (!entry.enabled) continue;
       const mod = this.mod(entry.id);
       const folder = this.modRoot(mod.id);
       if (entry.root === null && !entry.natives.length && !entry.csv?.length) incomplete.push(mod.name);
@@ -602,7 +611,7 @@ class Manager {
           continue;
         }
         const authors = files.get(key) || [];
-        authors.push(mod.name);
+        authors.push({ name: mod.name, position: index + 1 });
         files.set(key, authors);
         winners.set(key, item);
       }
@@ -615,10 +624,12 @@ class Manager {
       }
       for (const dll of entry.natives) natives.push(assetPath(folder, dll));
     }
-    const conflicts = [...files].filter(([, names]) => names.length > 1);
+    const conflicts = [...files].filter(([, authors]) => authors.length > 1);
     return { profile, winners, regulations, natives, report: {
       assets: winners.size, nativeCount: natives.length, regulations: regulations.map(({ id, name }) => ({ id, name })),
-      assetConflictCount: conflicts.length, conflicts: conflicts.slice(0, 300), incomplete
+      assetConflictCount: conflicts.length,
+      conflicts: conflicts.slice(0, 300).map(([key, authors]) => [winners.get(key).rel, authors]),
+      incomplete
     } };
   }
 
