@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.13
+
+### Patch Changes
+
+- b1cf9c9: Rename or delete save backups and open individual snapshot folders from Manage. Restore now preserves all current saves in a Before restore snapshot, and the Save backups page can open the main save folder directly.
+- 05a978d: Enter a load-order position directly and apply it with Enter or by leaving the field. Asset overrides now show one row per mod, with load-order numbers and a winner for each file. Regulation review compares competing values side by side and groups source versions, CSV tables, and change counts in a separate inputs table.
+
 ## [0.1.12] - 2026-11-08
 
 First GitHub release of Ringward for Steam Elden Ring on Windows x64.
