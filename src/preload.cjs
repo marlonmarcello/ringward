@@ -6,6 +6,7 @@ const channels = new Set([
   'mods:appearance-saves', 'mods:apply-appearance',
   'presets:state', 'presets:paste', 'presets:apply', 'presets:remove',
   'settings:smithbox', 'settings:me3-install', 'settings:me3-version', 'settings:skip-logos', 'saves:backup', 'saves:restore', 'merge:review', 'merge:build',
+  'saves:rename', 'saves:delete', 'saves:folder',
   'reshade:install', 'reshade:uninstall', 'reshade:select', 'reshade:me3',
   'game:launch', 'game:log', 'nexus:connect', 'nexus:disconnect', 'nexus:mod', 'nexus:download',
   'nexus:register', 'nexus:pending', 'open:external', 'open:data'

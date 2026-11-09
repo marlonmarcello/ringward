@@ -20,7 +20,7 @@
 | **Mod library** | Import ZIP, supported 7z or RAR archives, and extracted folders. Ringward detects asset roots, flags unknown layouts, and checks for duplicate files and content. |
 | **Regulation automation** | Combine `regulation.bin` files and Smithbox CSV patches using Smithbox definitions. Review competing edits, then let load order resolve the approved conflicts. Build a standalone file or have Ringward build it at launch. |
 | **Character presets** | Paste or import JSON from **Elden Sliders** and **Elden Bling Sliders**. Add, replace, or remove entries in the selected save’s in-game Favorites. Ringward backs up the save before each edit. |
-| **Save backups** | Keep an isolated save per profile, take manual or automatic snapshots, and restore earlier saves. Ringward backs up any existing saves it replaces during a restore. |
+| **Save backups** | Keep an isolated save per profile, take manual or automatic snapshots, and restore an earlier snapshot while preserving all current saves. Rename, delete, or open a snapshot from its Manage menu. |
 | **ReShade** | Install the standard runtime and managed shader collections, then import a preset archive or INI. Presets are independent of gameplay profiles. Tutorial progress, overlay settings, and saved preset edits carry over between launches. |
 | **Nexus Mods** | Look up mod files and import supported downloads through the Nexus API or `nxm://` links. The personal API key integration is available for testing in this development preview. |
 
@@ -47,7 +47,7 @@ A Smithbox CSV applies after that mod’s own binary regulation. Ringward identi
 
 - **Appearance.** Export JSON from [Elden Sliders](https://eldensliders.com/) or [Elden Bling Sliders](https://eldenblingsliders.com/), then import it under **Presets**. Close the game, select the PC save you play, and add the appearance to Favorites. Image-only slider guides can be viewed from the library and entered by hand.
 - **ReShade.** Open **ReShade**, install the runtime, and select an imported preset. Ringward uses bundled shaders and textures and reports missing effects. **Uninstall ReShade** removes the managed runtime and shader collections while keeping your imported presets.
-- **Saves.** Use **Save backups** for manual snapshots and restores. Use **Profile settings** to control automatic backups and isolated saves. Backups and the mod library live in Ringward’s app data.
+- **Saves.** Use **Save backups** for manual snapshots and restores. A restore makes a **Before restore** snapshot of your current saves first. The page can open your main save folder or the backups folder in File Explorer. Use **Profile settings** to control automatic backups and isolated saves.
 
 Nexus Mods personal API keys are for testing and personal use. Local archive imports work independently of a Nexus account. [Nexus Mods API policy](https://help.nexusmods.com/article/114-api-acceptable-use-policy)
 
