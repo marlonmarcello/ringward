@@ -13,6 +13,80 @@ permissions:
 jobs:
   build:
     runs-on: windows-2025
+    outputs:
+      release-tag: ${{ steps.release.outputs.tag }}
+      release-sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Plan release and extract notes
+        id: release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          PREVIOUS_SHA: ${{ github.event.before }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          if ($env:GITHUB_REF_TYPE -eq 'branch') {
+            $previous = git show "${env:PREVIOUS_SHA}:package.json" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read the previous app version.' }
+            if ($previous.version -eq $version) { return }
+            if ([version]$previous.version -ge [version]$version) { throw 'The release version must increase.' }
+          } elseif ($env:GITHUB_REF_NAME -ne $tag) {
+            throw 'The release tag and app version must match.'
+          }
+          $lock = Get-Content package-lock.json -Raw | ConvertFrom-Json -AsHashtable
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $lock.version -ne $version -or $lock.packages[''].version -ne $version) {
+            throw 'Both npm version files must match.'
+          }
+          $escaped = [regex]::Escape($version)
+          $pattern = '(?ms)^## (?:\[' + $escaped + '\]|' + $escaped + ')(?:[ \t][^\r\n]*)?\r?\n(.*?)(?=^## |^\[[^\]]+\]:|\z)'
+          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), $pattern).Groups[1].Value.Trim()
+          if (!$section) { throw "Add a changelog entry for $version before releasing." }
+          New-Item -ItemType Directory -Path artifacts | Out-Null
+          $section | Set-Content artifacts/release-notes.md -Encoding utf8
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+      - run: npm ci
+      - run: npm test
+      - name: Build Windows app
+        run: npm run build:unpacked
+      - name: Create Windows ZIP and checksum
+        if: steps.release.outputs.tag != ''
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $file = 'Ringward-{0}-win-x64.zip' -f $env:RELEASE_TAG
+          Compress-Archive -LiteralPath release/win-unpacked -DestinationPath "artifacts/$file"
+          $hash = (Get-FileHash "artifacts/$file" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $file" | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.release.outputs.tag != ''
+        with:
+          name: windows-release
+          path: artifacts/
+          if-no-files-found: error
+          compression-level: 0
+
+  version:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency: changesets-main
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -21,48 +95,20 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+      - run: npm ci --ignore-scripts
+      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          dotnet-version: 10.0.x
-      - name: Validate release version and extract notes
-        if: github.ref_type == 'tag'
-        shell: pwsh
-        run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $lock = Get-Content package-lock.json -Raw | ConvertFrom-Json -AsHashtable
-          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $env:GITHUB_REF_NAME -ne "v$version" -or
-              $lock.version -ne $version -or $lock.packages[''].version -ne $version) {
-            throw 'The release tag and both npm version files must match.'
-          }
-          $pattern = '(?ms)^## \[' + [regex]::Escape($version) + '\][^\r\n]*\r?\n(.*?)(?=^## |^\[[^\]]+\]:|\z)'
-          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), $pattern).Groups[1].Value.Trim()
-          if (!$section) { throw "Add a changelog entry for $version before releasing." }
-          New-Item -ItemType Directory -Path artifacts | Out-Null
-          $section | Set-Content artifacts/release-notes.md -Encoding utf8
-      - run: npm ci
-      - run: npm test
-      - name: Build Windows app
-        run: npm run build:unpacked
-      - name: Create Windows ZIP and checksum
-        if: github.ref_type == 'tag'
-        shell: pwsh
-        run: |
-          $file = 'Ringward-{0}-win-x64.zip' -f $env:GITHUB_REF_NAME
-          Compress-Archive -LiteralPath release/win-unpacked -DestinationPath "artifacts/$file"
-          $hash = (Get-FileHash "artifacts/$file" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $file" | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.ref_type == 'tag'
-        with:
-          name: windows-release
-          path: artifacts/
-          if-no-files-found: error
-          compression-level: 0
+          version-script: npm run version:release
+          pr-title: Version Ringward
+          commit-message: Version Ringward
+          create-github-releases: false
+          push-git-tags: false
 
   release:
-    if: github.ref_type == 'tag'
+    if: needs.build.outputs.release-tag != ''
     needs: build
     runs-on: ubuntu-latest
+    concurrency: release-${{ needs.build.outputs.release-tag }}
     permissions:
       contents: write
     steps:
@@ -75,14 +121,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.build.outputs.release-tag }}
+          RELEASE_SHA: ${{ needs.build.outputs.release-sha }}
         run: |
           assets=("artifacts/Ringward-${TAG}-win-x64.zip" artifacts/SHA256SUMS.txt)
-          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
-            if [[ "$draft" == "false" ]]; then
-              echo "Release $TAG is already published."
-              exit 0
-            fi
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
+          if [[ "$draft" == "false" ]]; then
+            echo "Release $TAG is already published."
+            exit 0
+          fi
+          # A tag pushed with GITHUB_TOKEN does not trigger a second workflow run.
+          if ! tagged_commit=$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null); then
+            gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$RELEASE_SHA" > /dev/null
+            tagged_commit="$RELEASE_SHA"
+          fi
+          [[ "$tagged_commit" == "$RELEASE_SHA" ]] || { echo "Tag $TAG points to a different commit."; exit 1; }
+          if [[ "$draft" == "true" ]]; then
             gh release upload "$TAG" "${assets[@]}" --clobber
           else
             flags=()

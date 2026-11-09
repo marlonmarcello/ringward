@@ -143,6 +143,8 @@ function filterMods() {
     if (!row.hidden) visible++;
     const handle = row.querySelector('.drag-handle');
     if (handle) handle.draggable = !filtered;
+    const position = row.querySelector('[data-order-position]');
+    if (position) position.disabled = filtered;
     for (const button of row.querySelectorAll('[data-order-edge]')) {
       button.disabled = filtered || button.dataset.orderEdge === 'true';
     }
@@ -183,8 +185,9 @@ function loadout() {
     return '<div class="row ' + (entry.enabled ? '' : 'off') + '" data-loadout-mod="' + html(entry.id) +
       '" data-mod-status="' + (entry.enabled ? 'enabled' : 'disabled') + '" data-search-text="' + searchText(item) +
       '"><span class="drag-handle" draggable="true" title="Drag to reorder">' +
-      icon('grip') + '</span><span class="number">' + (index + 1) +
-      '</span><input type="checkbox" data-toggle="' + entry.id + '" aria-label="Enable ' + html(item.name) + '" ' +
+      icon('grip') + '</span><input class="order-position" data-order-position type="number" min="1" max="' + active.mods.length +
+      '" value="' + (index + 1) + '" aria-label="Load order position for ' + html(item.name) + '" title="Edit load order position">' +
+      '<input type="checkbox" data-toggle="' + entry.id + '" aria-label="Enable ' + html(item.name) + '" ' +
       (entry.enabled ? 'checked' : '') + '><div class="item"><strong>' + html(item.name) + '</strong><small>' + summary + '</small></div>' +
       (needsSetup ? tag('Setup', 'attn') : item.csvs?.length && !csvCount ? tag('CSV available') : '') +
       (item.warnings?.length ? tag('Import notes', 'attn') : '') + '<div class="actions">' +
@@ -205,7 +208,7 @@ function loadout() {
     html(active.name) + '</h1><p>' + count + '</p><div class="actions">' +
     button('profile-settings', icon('settings') + ' Profile settings') + button('profile-duplicate', 'Duplicate', 'subtle') +
     '</div></section>' + dropzone() + '<div class="columns"><div>' +
-    panel('Load order', 'Drag by the handle to reorder. Mods farther down have higher priority.',
+    panel('Load order', 'Drag the handle or edit a position number. Mods farther down have higher priority.',
       rows ? modFilters('Search loadout') + rows + noMatches : empty,
       button('nav', 'Open library ' + icon('arrow'), 'subtle', data('library'))) +
     '</div><div class="stack">' + panel('Compatibility', '', body(conflicts + merge +
@@ -584,31 +587,60 @@ function configList(id) {
   });
 }
 
+function showAssetConflicts() {
+  const { conflicts, assetConflictCount } = state.plan;
+  const groups = conflicts.map(([file, mods]) => '<tbody>' + mods.map((item, index) => {
+    const wins = index === mods.length - 1;
+    return '<tr' + (wins ? ' class="asset-winner"' : '') + '>' +
+      (index === 0 ? '<th scope="rowgroup" rowspan="' + mods.length + '"><code>' + html(file) + '</code></th>' : '') +
+      '<td class="order-cell">#' + number(item.position) + '</td><td>' + html(item.name) + '</td><td>' +
+      (wins ? '<span class="winner-label">' + icon('check') + ' Wins</span>' : '<span class="muted">Overridden</span>') +
+      '</td></tr>';
+  }).join('') + '</tbody>').join('');
+  dialog('Asset overrides', '<p>The highest load-order position supplies each shared file.</p>' +
+    '<div class="table-wrap review-table"><table class="asset-review"><thead><tr><th scope="col">File</th>' +
+    '<th scope="col">Position</th><th scope="col">Mod</th><th scope="col">Result</th></tr></thead>' + groups + '</table></div>' +
+    (assetConflictCount > conflicts.length ? '<p class="metric">Showing ' + number(conflicts.length) + ' of ' +
+      number(assetConflictCount) + ' shared paths.</p>' : ''));
+}
+
+function regulationValue(source, value) {
+  return '<strong>' + html(source) + '</strong>' +
+    (value === '' ? '<small>Empty value</small>' : '<code class="review-value">' + html(value) + '</code>');
+}
+
 function showMerge(report, launch = false) {
   if (!report) return;
   const approved = mergeReport?.approved && mergeReport.fingerprint === report.fingerprint;
   mergeReport = { ...report, approved };
-  const rows = report.conflicts.map(item => '<tr><td>' + html(item.table) + '</td><td>' + item.row +
-    (item.index ? ' (' + (item.index + 1) + ')' : '') + '</td><td>' + html(item.field) + '</td><td>' +
-    html(item.previous) + '<br><small>' + html(item.previousValue) + '</small></td><td>' + html(item.next) +
-    '<br><small>' + html(item.nextValue) + '</small></td></tr>').join('');
-  const sources = report.sources.map(item => '<li><strong>' + html(item.name) + '</strong> · ' + number(item.changes) +
-    ' changes · ' + (item.table ? 'CSV → ' + html(item.table) +
-      (item.retiredPadding ? ' · skipped ' + item.retiredPadding + ' retired zero-only padding columns' : '') :
-      'regulation ' + html(item.version) + (item.version !== report.version ? ' (rebased)' : '')) + '</li>').join('');
+  const rows = report.conflicts.map(item => '<tr><td><strong>' + html(item.table) + '</strong><small>Row ' +
+    html(item.row) + (item.index ? ' · occurrence ' + (item.index + 1) : '') + '</small></td><td>' + html(item.field) +
+    '</td><td>' + regulationValue(item.previous, item.previousValue) +
+    '</td><td class="later-edit">' + regulationValue(item.next, item.nextValue) + '</td></tr>').join('');
+  const sources = report.sources.map((item, index) => '<tr><td class="order-cell">' + (index + 1) + '</td><td><strong>' +
+    html(item.name) + '</strong></td><td>' + (item.table ? 'CSV · ' + html(item.table) +
+      (item.retiredPadding ? '<small>' + number(item.retiredPadding) + ' retired padding columns skipped</small>' : '') :
+      'Regulation ' + html(item.version) + (item.version !== report.version ? ' ' + tag('Rebased', 'attn') : '')) +
+    '</td><td class="order-cell">' + number(item.changes) + '</td></tr>').join('');
   const count = report.conflictCount;
   const needsApproval = count && !approved;
-  const conflicts = count ? '<div class="callout">' + number(count) +
-    ' competing edits. When two mods change the same field, the mod farther down the load order wins.</div>' +
-    '<div class="table-wrap"><table><thead><tr><th>Table</th><th>Row</th><th>Field</th><th>Lower priority</th><th>Higher priority</th></tr></thead><tbody>' +
-    rows + '</tbody></table></div>' + (count > report.conflicts.length ? '<p class="metric">Showing the first ' + report.conflicts.length + ' conflicts.</p>' : '')
+  const conflicts = count ? '<div class="callout"><strong>' + number(count) +
+    ' competing edits</strong><p>Each row shows one replacement in load order. A later input can replace the value again.</p></div>' +
+    '<div class="table-wrap review-table"><table><thead><tr><th scope="col">Table and row</th><th scope="col">Field</th>' +
+    '<th scope="col">Earlier edit</th><th scope="col">Replacement</th></tr></thead><tbody>' +
+    rows + '</tbody></table></div>' + (count > report.conflicts.length ? '<p class="metric">Showing ' +
+      number(report.conflicts.length) + ' of ' + number(count) + ' competing edits.</p>' : '')
     : '<p class="muted">No competing edits. Ringward can combine these changes automatically.</p>';
+  const inputs = '<details class="review-inputs"' + (count ? '' : ' open') + '><summary>Inputs in merge order · ' +
+    number(report.sources.length) + '</summary><div class="table-wrap review-table"><table><thead><tr><th scope="col">Input</th>' +
+    '<th scope="col">Mod or patch</th><th scope="col">Source</th><th scope="col">Changes</th></tr></thead><tbody>' +
+    sources + '</tbody></table></div></details>';
   const intro = launch
     ? 'Review the competing edits before Ringward builds one regulation.bin and starts the game.'
     : 'Build a copy of regulation.bin for this loadout. Launch offline also builds the file automatically before starting the game.';
   const label = launch ? 'Use load order & launch' : needsApproval ? 'Use load order & build' : 'Build regulation.bin';
   dialog('Regulation review', '<p>' + intro + '</p><p class="muted">Installed regulation ' +
-    html(report.version) + '</p><ul>' + sources + '</ul>' + conflicts, label, async () => {
+    html(report.version) + '</p>' + conflicts + inputs, label, async () => {
       mergeReport = { ...report, approved: true };
       if (launch) return startGame();
       const result = await perform(() => app.invoke('merge:build', state.active, report.fingerprint));
@@ -766,10 +798,7 @@ const actions = {
     }
     showMerge(await perform(() => app.invoke('merge:review', state.active)));
   },
-  'asset-conflicts': () => dialog('Asset overrides',
-    '<p>The last enabled mod in your load order wins at each shared path.</p><div class="table-wrap"><table><thead><tr><th>File</th><th>Mods in order</th></tr></thead><tbody>' +
-    state.plan.conflicts.map(([file, mods]) => '<tr><td>' + html(file) + '</td><td>' + html(mods.join(' → ')) + '</td></tr>').join('') +
-    '</tbody></table></div>' + (state.plan.assetConflictCount > state.plan.conflicts.length ? '<p>Showing the first 300 paths.</p>' : '')),
+  'asset-conflicts': showAssetConflicts,
   launch: startGame,
   'view-log': async () => {
     const log = await perform(() => app.invoke('game:log'));
@@ -805,10 +834,36 @@ function profileAction(action, id, extra = {}) {
   return perform(() => app.invoke('profile:mod', { action, profile: state.active, modId: id, ...extra }));
 }
 
+function commitLoadoutPosition(input) {
+  if (input.value === input.defaultValue) return;
+  const position = input.valueAsNumber;
+  const valid = input.validity.valid && Number.isInteger(position);
+  input.value = input.defaultValue;
+  if (loading || input.disabled) return;
+  if (!valid) return toast('Enter a load order position from 1 to ' + input.max + '.', true);
+  if (position !== Number(input.defaultValue)) {
+    profileAction('position', input.closest('[data-loadout-mod]').dataset.loadoutMod, { position });
+  }
+}
+
 document.addEventListener('click', event => {
   const target = event.target.closest('button[data-action]');
   if (!target || loading) return;
   actions[target.dataset.action]?.(target.dataset.id, target);
+});
+document.addEventListener('focusin', event => {
+  if (event.target.matches('[data-order-position]')) event.target.select();
+});
+document.addEventListener('keydown', event => {
+  const input = event.target;
+  if (!input.matches('[data-order-position]') || !['Enter', 'Escape'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === 'Escape') input.value = input.defaultValue;
+  else commitLoadoutPosition(input);
+  input.blur();
+});
+document.addEventListener('focusout', event => {
+  if (event.target.matches('[data-order-position]')) commitLoadoutPosition(event.target);
 });
 document.addEventListener('change', event => {
   if (event.target.matches('[data-skip-logos]')) {

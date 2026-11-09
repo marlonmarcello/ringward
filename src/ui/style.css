@@ -101,6 +101,9 @@ h3 { font-size: 13px; }
 .row .item { min-width: 0; flex: 1; }
 .row .actions { justify-content: flex-end; flex-shrink: 0; }
 .number { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--muted); width: 18px; }
+input.order-position { width: 42px; padding: 4px 2px; text-align: center; font-variant-numeric: tabular-nums; appearance: textfield; }
+.order-position::-webkit-inner-spin-button, .order-position::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.order-position:disabled { opacity: .45; }
 .empty { text-align: center; padding: 33px 18px; color: var(--muted); }
 .empty h3 { font-size: 15px; color: #dedfd1; margin-bottom: 4px; }
 .empty .actions { margin-top: 13px; justify-content: center; }
@@ -121,14 +124,27 @@ h3 { font-size: 13px; }
 table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
 th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 th { background: var(--inset); position: sticky; top: 0; }
+.review-table { border: 1px solid var(--line); border-radius: 7px; }
+.review-table th, .review-table td { padding: 8px 10px; vertical-align: top; }
+.review-table small, .review-value { display: block; margin-top: 4px; color: var(--muted); }
+.review-table .order-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.asset-review tbody + tbody { border-top: 2px solid #485346; }
+.asset-review th[scope="rowgroup"] { position: static; width: 36%; }
+.asset-winner, .later-edit { background: #253526; }
+.winner-label { display: inline-flex; align-items: center; gap: 4px; color: #c7e3b8; font-weight: 700; }
+.winner-label svg { width: 14px; height: 14px; }
+.review-inputs { margin-top: 14px; }
+.review-inputs summary { cursor: pointer; padding: 8px 0; font-weight: 700; }
 pre { max-height: 380px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #111611; border: 1px solid var(--line); border-radius: 7px; padding: 10px; font: 12px/1.5 Consolas, monospace; }
 dialog { max-width: min(760px, calc(100vw - 40px)); width: 100%; max-height: calc(100vh - 60px); overflow: auto; color: inherit; padding: 0; border: 1px solid #55604f; border-radius: 12px; background: #20271f; box-shadow: 0 20px 65px #000a; }
+dialog:has(.review-table) { max-width: min(1000px, calc(100vw - 40px)); }
 dialog::backdrop { background: #0b100ce0; }
 dialog header, dialog footer { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; gap: 8px; }
 dialog header { border-bottom: 1px solid var(--line); }
 dialog footer { justify-content: flex-end; border-top: 1px solid var(--line); }
 #dialog-content { padding: 16px 18px; }
 #dialog-content p { margin-bottom: 9px; }
+#dialog-content .callout p { margin: 4px 0 0; }
 .toast, .operation { position: fixed; z-index: 5; right: 22px; bottom: 20px; width: min(560px, calc(100vw - 44px)); border: 1px solid #5e6a56; background: #273224; box-shadow: 0 10px 32px #0008; border-radius: 9px; padding: 12px 14px; white-space: pre-line; overflow-wrap: anywhere; }
 .toast.error { background: #382723; border-color: #926557; color: #f5c8bb; }
 .operation { bottom: 70px; display: flex; align-items: center; gap: 10px; }
