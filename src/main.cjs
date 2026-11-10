@@ -6,6 +6,7 @@ const { Manager } = require('./manager.cjs');
 const { atomicWrite, detect, exists } = require('./platform.cjs');
 const { assertNoExternalHooks } = require('./reshade.cjs');
 const { restoreWindowState } = require('./window-state.cjs');
+const { AppUpdates, previewDefault } = require('./app-updates.cjs');
 const nexus = require('./nexus.cjs');
 
 app.setName('Ringward');
@@ -22,9 +23,11 @@ const urls = {
 const protocolArgs = process.defaultApp ? [path.resolve(__dirname, '..')] : [];
 let window;
 let manager;
+let updates;
 let account = null;
 let credential = '';
 let busy = false;
+let steamLaunchUntil = 0;
 const pending = [];
 
 function send(channel, data) {
@@ -43,7 +46,12 @@ function protocolRegistered() {
 }
 
 async function getState() {
-  return { ...manager.snapshot(), tools: await manager.toolStatus(), account, protocol: protocolRegistered() };
+  return { ...manager.snapshot(), tools: await manager.toolStatus(), account, protocol: protocolRegistered(),
+    updates: updates.snapshot() };
+}
+
+function checkUpdates() {
+  return updates.check(manager.state.settings.updatePreviews ?? previewDefault(updates.version));
 }
 
 function register(name, handler, exclusive = false) {
@@ -124,6 +132,27 @@ function registerActions() {
   }, true);
   register('settings:detect', async () => manager.autodetect(await detect()), true);
   register('settings:skip-logos', value => manager.setSkipLogos(value), true);
+  register('updates:preference', async (key, value) => {
+    if (!['checkUpdatesAtStartup', 'updatePreviews'].includes(key) || typeof value !== 'boolean') {
+      throw new Error('Unknown update preference.');
+    }
+    if (key === 'updatePreviews' && updates.active) throw new Error('Wait for the current update operation to finish.');
+    await manager.update(state => { state.settings[key] = value; });
+    if (key === 'updatePreviews') updates.reset();
+  }, true);
+  register('updates:check', checkUpdates, true);
+  register('updates:download', () => {
+    if (busy) throw new Error('Wait for the current operation to finish.');
+    return updates.download();
+  });
+  register('updates:manual', () => shell.openExternal(updates.downloadUrl()));
+  register('updates:install', async () => {
+    const started = await updates.install(async () => {
+      if (Date.now() < steamLaunchUntil) throw new Error('Wait for Elden Ring to finish starting, then close it before updating.');
+      await manager.assertClosed();
+    });
+    if (started) app.quit();
+  }, true);
   register('settings:smithbox', () => manager.installSmithbox(), true);
   register('settings:me3-install', () => manager.installMe3(), true);
   register('reshade:install', () => manager.installReShade(), true);
@@ -157,6 +186,7 @@ function registerActions() {
       await assertNoExternalHooks(game);
       await manager.assertClosed();
       await shell.openExternal('steam://rungameid/1245620');
+      steamLaunchUntil = Date.now() + 30_000;
     }
     return result;
   }, true);
@@ -230,6 +260,11 @@ if (!app.requestSingleInstanceLock()) {
       : path.join(__dirname, '..', '.tools', 'merge', 'Ringward.Merge.exe');
     manager = new Manager(root, worker, data => send('operation:progress', data));
     await manager.init(await detect());
+    updates = new AppUpdates({
+      version: app.getVersion(), executable: process.execPath, directory: path.join(root, 'app-updates'),
+      enabled: app.isPackaged && process.platform === 'win32', notify: data => send('updates:state', data)
+    });
+    await updates.init();
     try {
       const stored = JSON.parse(safeStorage.decryptString(await fs.readFile(manager.at('nexus-key.bin'))));
       credential = stored.key;
@@ -269,6 +304,7 @@ if (!app.requestSingleInstanceLock()) {
       if (placement.maximized) window.maximize();
       else window.show();
     });
+    if (manager.state.settings.checkUpdatesAtStartup !== false) void checkUpdates();
     await window.loadFile(path.join(__dirname, 'ui', 'index.html'));
   }).catch(error => {
     dialog.showErrorBox('Ringward could not start', error.message);
