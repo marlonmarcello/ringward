@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.14
+
+### Patch Changes
+
+- 2d56ae8: Open the configured save directory when multiple Steam accounts have saves, including accounts that only have modded saves.
+- 2d56ae8: Ringward now remembers its window size, position, and maximized state between launches.
+- 2d56ae8: Windows releases now offer a setup wizard alongside the portable ZIP, with SHA-256 checksums for both downloads.
+
 ## 0.1.13
 
 ### Patch Changes
