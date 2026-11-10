@@ -29,47 +29,48 @@ test('restoring a partial backup preserves every current save in a separate snap
   const stock = '76561198000000001/ER0000.sl2';
   const other = '76561198000000002/Offline.co2';
   await writeSave(saves, stock, 'older');
-  const backup = await manager.makeBackup('Before Favorites edit', null, [stock]);
+  assert.equal(await manager.backups.mainSaveFolder(), path.dirname(path.join(saves, stock)));
+  const backup = await manager.backups.create('Before Favorites edit', null, [stock]);
   await writeSave(saves, stock, 'current');
   await writeSave(saves, other, 'other account');
 
-  assert.equal(await manager.mainSaveFolder(), path.dirname(path.join(saves, stock)));
-  assert.deepEqual(await manager.restore(backup.id), { preserved: true });
+  assert.equal(await manager.backups.mainSaveFolder(), saves);
+  assert.deepEqual(await manager.backups.restore(backup.id), { preserved: true });
   const [beforeRestore] = manager.snapshot().backups;
   assert.equal(beforeRestore.reason, 'Before restore');
   assert.equal(beforeRestore.count, 2);
-  const preserved = await manager.backupFolder(beforeRestore.id);
+  const preserved = await manager.backups.folder(beforeRestore.id);
   assert.equal(await fs.readFile(path.join(preserved, stock), 'utf8'), 'current');
   assert.equal(await fs.readFile(path.join(preserved, other), 'utf8'), 'other account');
   assert.equal(await fs.readFile(path.join(saves, stock), 'utf8'), 'older');
   assert.equal(await fs.readFile(path.join(saves, other), 'utf8'), 'other account');
 
   await writeSave(saves, '76561198000000002/ER0000.sl2', 'another main save');
-  assert.equal(await manager.mainSaveFolder(), saves);
+  assert.equal(await manager.backups.mainSaveFolder(), saves);
 });
 
 test('renaming and deleting a backup leaves live saves intact', async t => {
   const { manager, saves } = await setup(t);
   const relative = '76561198000000001/ER0000.sl2';
   await writeSave(saves, relative, 'live');
-  const backup = await manager.makeBackup('Manual', manager.state.active);
-  const folder = await manager.backupFolder(backup.id);
-  await assert.rejects(manager.renameBackup(backup.id, '  '), /Enter a backup name/);
-  await manager.renameBackup(backup.id, ' Before the DLC ');
+  const backup = await manager.backups.create('Manual', manager.state.active);
+  const folder = await manager.backups.folder(backup.id);
+  await assert.rejects(manager.backups.rename(backup.id, '  '), /Enter a backup name/);
+  await manager.backups.rename(backup.id, ' Before the DLC ');
   assert.equal(manager.snapshot().backups[0].name, 'Before the DLC');
-  assert.equal(await manager.backupFolder(backup.id), folder);
+  assert.equal(await manager.backups.folder(backup.id), folder);
 
   const commit = manager.commit;
   manager.commit = async () => { throw new Error('Cannot write backup index'); };
-  await assert.rejects(manager.deleteBackup(backup.id), /Cannot write backup index/);
+  await assert.rejects(manager.backups.delete(backup.id), /Cannot write backup index/);
   manager.commit = commit;
   assert.equal(await fs.readFile(path.join(folder, relative), 'utf8'), 'live');
   assert.equal(manager.snapshot().backups.length, 1);
 
   // Simulate a process exit after parking the backup but before deleting the record.
   await fs.rename(folder, folder + '.deleting');
-  assert.equal(await manager.backupFolder(backup.id), folder + '.deleting');
-  await manager.deleteBackup(backup.id);
+  assert.equal(await manager.backups.folder(backup.id), folder + '.deleting');
+  await manager.backups.delete(backup.id);
   assert.deepEqual(manager.snapshot().backups, []);
   await assert.rejects(fs.access(folder + '.deleting'), { code: 'ENOENT' });
   assert.equal(await fs.readFile(path.join(saves, relative), 'utf8'), 'live');
@@ -78,14 +79,14 @@ test('renaming and deleting a backup leaves live saves intact', async t => {
 test('deletion protects a backup that contains the configured save folder', async t => {
   const { manager, saves } = await setup(t);
   await writeSave(saves, mainSave, 'protected');
-  const backup = await manager.makeBackup('Manual', manager.state.active);
-  const folder = await manager.backupFolder(backup.id);
+  const backup = await manager.backups.create('Manual', manager.state.active);
+  const folder = await manager.backups.folder(backup.id);
   const alias = path.join(path.dirname(saves), 'save-alias');
   await fs.symlink(folder, alias, directoryLink);
 
   for (const target of [folder, path.dirname(path.join(folder, mainSave)), alias]) {
     await manager.setSetting('saves', target);
-    await assert.rejects(manager.deleteBackup(backup.id), /contains the configured save folder/);
+    await assert.rejects(manager.backups.delete(backup.id), /contains the configured save folder/);
     assert.equal(await fs.readFile(path.join(folder, mainSave), 'utf8'), 'protected');
     assert.equal(manager.snapshot().backups.length, 1);
   }
@@ -94,14 +95,14 @@ test('deletion protects a backup that contains the configured save folder', asyn
 test('startup retries a delete that could not finish after the index was committed', async t => {
   const { manager, saves } = await setup(t);
   await writeSave(saves, mainSave, 'live');
-  const backup = await manager.makeBackup('Manual', manager.state.active);
-  const parked = (await manager.backupFolder(backup.id)) + '.deleting';
+  const backup = await manager.backups.create('Manual', manager.state.active);
+  const parked = (await manager.backups.folder(backup.id)) + '.deleting';
   const remove = fs.rm;
   const locked = t.mock.method(fs, 'rm', (file, options) => {
     if (file === parked) throw new Error('Windows still has the folder open');
     return remove(file, options);
   });
-  assert.deepEqual(await manager.deleteBackup(backup.id), { remaining: parked });
+  assert.deepEqual(await manager.backups.delete(backup.id), { remaining: parked });
   locked.mock.restore();
   assert.deepEqual(manager.snapshot().backups, []);
 
@@ -120,20 +121,20 @@ test('startup retries a delete that could not finish after the index was committ
 test('redirected backup storage supports existing snapshots and new backups', async t => {
   const { manager, saves } = await setup(t);
   await writeSave(saves, mainSave, 'older');
-  const first = await manager.makeBackup('Manual', manager.state.active);
+  const first = await manager.backups.create('Manual', manager.state.active);
   const storage = manager.at('backups');
   const redirected = path.join(path.dirname(saves), 'redirected');
   await fs.rename(storage, redirected);
   await fs.symlink(redirected, storage, directoryLink);
 
   const folder = path.join(await fs.realpath(redirected), first.id);
-  assert.equal(await manager.backupFolder(first.id), folder);
+  assert.equal(await manager.backups.folder(first.id), folder);
   await writeSave(saves, mainSave, 'current');
-  assert.deepEqual(await manager.restore(first.id), { preserved: true });
+  assert.deepEqual(await manager.backups.restore(first.id), { preserved: true });
   assert.equal(await fs.readFile(path.join(saves, mainSave), 'utf8'), 'older');
-  const preserved = await manager.backupFolder(manager.snapshot().backups[0].id);
+  const preserved = await manager.backups.folder(manager.snapshot().backups[0].id);
   assert.equal(await fs.readFile(path.join(preserved, mainSave), 'utf8'), 'current');
-  await manager.deleteBackup(first.id);
+  await manager.backups.delete(first.id);
   await assert.rejects(fs.access(folder), { code: 'ENOENT' });
   assert.equal(await fs.readFile(path.join(preserved, mainSave), 'utf8'), 'current');
 });

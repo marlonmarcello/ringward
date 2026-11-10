@@ -68,14 +68,16 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           $zip = 'Ringward-{0}-win-x64.zip' -f $env:RELEASE_TAG
-          $installer = 'Ringward-{0}-setup.exe' -f $env:RELEASE_TAG
+          $installers = @(Get-ChildItem -LiteralPath release -Filter '*.exe' -File)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer from electron-builder.' }
+          $installer = $installers[0]
           Compress-Archive -LiteralPath release/win-unpacked -DestinationPath "artifacts/$zip"
-          Copy-Item -LiteralPath "release/$installer" -Destination artifacts
-          $checksums = foreach ($file in @($installer, $zip)) {
+          Copy-Item -LiteralPath $installer.FullName -Destination artifacts
+          $checksums = foreach ($file in @($installer.Name, $zip)) {
             $hash = (Get-FileHash -LiteralPath "artifacts/$file" -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $file"
           }
-          $checksums | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+          (($checksums -join "`n") + "`n") | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii -NoNewline
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.release.outputs.tag != ''
         with:
@@ -88,7 +90,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
-    concurrency: changesets-main
+    concurrency:
+      group: changesets-main
+      queue: max
     permissions:
       contents: write
       pull-requests: write
@@ -101,7 +105,20 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Check whether this run is still on main
+        id: main-tip
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$tip" == "$GITHUB_SHA" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping version PR update because main has advanced."
+          fi
       - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        if: steps.main-tip.outputs.current == 'true'
         with:
           version-script: npm run version:release
           pr-title: Version Ringward
@@ -129,12 +146,19 @@ jobs:
           TAG: ${{ needs.build.outputs.release-tag }}
           RELEASE_SHA: ${{ needs.build.outputs.release-sha }}
         run: |
-          assets=("artifacts/Ringward-${TAG}-setup.exe" "artifacts/Ringward-${TAG}-win-x64.zip" artifacts/SHA256SUMS.txt)
           draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
           if [[ "$draft" == "false" ]]; then
             echo "Release $TAG is already published."
             exit 0
           fi
+          shopt -s nullglob
+          installers=(artifacts/*.exe)
+          archives=(artifacts/*.zip)
+          if (( ${#installers[@]} != 1 || ${#archives[@]} != 1 )); then
+            echo "Expected one staged installer and one portable ZIP."
+            exit 1
+          fi
+          assets=("${installers[@]}" "${archives[@]}" artifacts/SHA256SUMS.txt)
           # A tag pushed with GITHUB_TOKEN does not trigger a second workflow run.
           if ! tagged_commit=$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null); then
             gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$RELEASE_SHA" > /dev/null

@@ -138,11 +138,11 @@ function registerActions() {
     if (!me3.version) throw new Error('The installed ME3 version could not be read.');
     return me3.version;
   });
-  register('saves:backup', () => manager.backup(), true);
-  register('saves:restore', id => manager.restore(id), true);
-  register('saves:rename', (id, name) => manager.renameBackup(id, name), true);
-  register('saves:delete', id => manager.deleteBackup(id), true);
-  register('saves:folder', async id => reveal(await manager.backupFolder(id)));
+  register('saves:backup', () => manager.backups.createManual(), true);
+  register('saves:restore', id => manager.backups.restore(id), true);
+  register('saves:rename', (id, name) => manager.backups.rename(id, name), true);
+  register('saves:delete', id => manager.backups.delete(id), true);
+  register('saves:folder', async id => reveal(await manager.backups.folder(id)));
   register('merge:review', id => manager.review(id), true);
   register('merge:build', async (id, approval) => {
     const result = await manager.buildRegulation(id, approval);
@@ -208,7 +208,7 @@ function registerActions() {
   });
   register('open:data', async key => {
     if (key === 'library' || key === 'backups') return reveal(manager.at(key));
-    if (key === 'saves') return reveal(await manager.mainSaveFolder());
+    if (key === 'saves') return reveal(await manager.backups.mainSaveFolder());
     throw new Error('Unknown folder.');
   });
 }
