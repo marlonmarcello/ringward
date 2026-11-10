@@ -46,6 +46,7 @@
       "signExecutable": false
     },
     "nsis": {
+      "artifactName": "Ringward-v${version}-setup.${ext}",
       "oneClick": false,
       "perMachine": false
     }

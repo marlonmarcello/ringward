@@ -15,6 +15,7 @@ const {
 } = require('./appearance.cjs');
 const nexus = require('./nexus.cjs');
 const reshade = require('./reshade.cjs');
+const { BackupStorage } = require('./backups.cjs');
 
 const SMITHBOX = {
   name: 'Smithbox 2.2.6',
@@ -37,18 +38,6 @@ const newProfile = name => ({ id: id(), name, mods: [], isolated: true, autoBack
 const VANILLA = 'vanilla';
 const vanillaProfile = () => ({ id: VANILLA, name: 'Vanilla', mods: [], isolated: false, autoBackup: false, diagnostics: false, immutable: true });
 const assetPath = (root, file) => path.join(root, ...file.split('/'));
-const stamp = () => new Date().toISOString();
-const BACKUP_ID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
-
-async function backupDirectoryExists(folder) {
-  const entry = await fs.lstat(folder).catch(error => {
-    if (error.code !== 'ENOENT') throw error;
-  });
-  if (!entry) return false;
-  if (!entry.isDirectory()) throw new Error('This backup path is not a regular folder.');
-  return true;
-}
-
 function modEntry(mod) {
   const root = mod.suggested ?? (mod.candidates.length === 1 ? mod.candidates[0] : null);
   const csv = mod.csvs?.length === 1 && mod.candidates.length <= 1 &&
@@ -125,6 +114,12 @@ class Manager {
     this.root = root;
     this.worker = worker;
     this.onProgress = onProgress;
+    this.backups = new BackupStorage(
+      this.at('backups'),
+      () => this.state,
+      change => this.update(change),
+      () => this.assertClosed()
+    );
   }
 
   async init(detected) {
@@ -148,7 +143,7 @@ class Manager {
       };
       await this.commit(this.state);
     }
-    await this.retryBackupDeletions().catch(() => {});
+    await this.backups.retryDeletions().catch(() => {});
   }
 
   at(...parts) { return path.join(this.root, ...parts); }
@@ -532,8 +527,8 @@ class Manager {
     const original = await readPcSave(target);
     const result = change(original);
     if (result.already) return { slot: result.slot, already: true };
-    const backup = await this.makeBackup('Before Favorites edit', selected.profileId, [relative]);
-    const saved = await readPcSave(assetPath(this.at('backups', backup.id), relative));
+    const backup = await this.backups.create('Before Favorites edit', selected.profileId, [relative]);
+    const saved = await readPcSave(assetPath(await this.backups.folder(backup.id), relative));
     if (!saved.equals(original)) throw new Error('The save changed during backup. Try again with Elden Ring closed.');
     await atomicWrite(target, result.save, async () => {
       await this.assertClosed();
@@ -780,177 +775,6 @@ class Manager {
     if (this.child || await gameRunning()) throw new Error('Close Elden Ring before continuing.');
   }
 
-  async makeBackup(reason, profileId, subset = null) {
-    const root = this.state.settings.saves;
-    const files = subset || await saveFiles(root);
-    if (!files.length) return null;
-    const backup = { id: id(), time: stamp(), reason, profile: profileId, files };
-    await fs.mkdir(this.at('backups'), { recursive: true });
-    const dest = path.join(await this.backupRoot(), backup.id);
-    await fs.mkdir(dest);
-    try {
-      for (const relative of files) {
-        const source = await assertSaveTarget(root, relative);
-        const output = assetPath(dest, relative);
-        await fs.mkdir(path.dirname(output), { recursive: true });
-        await fs.copyFile(source, output);
-      }
-      await this.update(state => { state.backups.unshift(backup); });
-      return backup;
-    } catch (error) {
-      await fs.rm(dest, { recursive: true, force: true });
-      throw error;
-    }
-  }
-
-  async backup() {
-    await this.assertClosed();
-    if (!await this.makeBackup('Manual', this.state.active)) throw new Error('No Elden Ring saves were found in the configured folder.');
-  }
-
-  backupRecord(backupId) {
-    const backup = this.state.backups.find(item => item.id === backupId);
-    if (!backup || !BACKUP_ID.test(backup.id)) {
-      throw new Error('This backup is unavailable.');
-    }
-    return backup;
-  }
-
-  backupRoot() {
-    return fs.realpath(this.at('backups'));
-  }
-
-  async backupFolder(backupId) {
-    const { id } = this.backupRecord(backupId);
-    const folder = path.join(await this.backupRoot(), id);
-    // A backup parked by an interrupted delete is still usable while it is listed.
-    if (await backupDirectoryExists(folder)) return folder;
-    if (await backupDirectoryExists(folder + '.deleting')) return folder + '.deleting';
-    return folder;
-  }
-
-  async mainSaveFolder() {
-    const root = this.state.settings.saves;
-    if (!root) throw new Error('Choose the Elden Ring save folder in Settings.');
-    const saves = await saveFiles(root);
-    const main = saves.filter(file => /^ER0000\.sl2$/i.test(path.posix.basename(file)));
-    const accounts = new Set((main.length ? main : saves).map(file => path.posix.dirname(file)));
-    return accounts.size === 1 ? path.join(root, accounts.values().next().value) : root;
-  }
-
-  async renameBackup(backupId, value) {
-    this.backupRecord(backupId);
-    if (typeof value !== 'string' || !value.trim()) throw new Error('Enter a backup name.');
-    await this.update(state => { state.backups.find(item => item.id === backupId).name = cleanName(value); });
-  }
-
-  async protectSaveFolder(...folders) {
-    const configured = this.state.settings.saves;
-    if (!configured) return;
-    const configuredPath = path.resolve(configured);
-    const resolved = await fs.realpath(configured).catch(error => {
-      if (error.code !== 'ENOENT') throw error;
-      return configuredPath;
-    });
-    for (const folder of folders) {
-      if ([configuredPath, resolved].some(savePath => {
-        const relative = path.relative(folder, savePath);
-        return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
-      })) {
-        throw new Error('This backup contains the configured save folder. Choose a different save folder before deleting it.');
-      }
-    }
-  }
-
-  async retryBackupDeletions() {
-    const pending = this.state.pendingBackupDeletions;
-    if (!pending?.length) return;
-    const root = await this.backupRoot();
-    const remaining = [];
-    for (const item of pending) {
-      // If storage was redirected again, wait until the original location is available.
-      if (path.relative(root, item.root) || !BACKUP_ID.test(item.id) || this.state.backups.some(backup => backup.id === item.id)) {
-        remaining.push(item);
-        continue;
-      }
-      const parked = path.join(root, item.id + '.deleting');
-      try {
-        if (await backupDirectoryExists(parked)) {
-          await this.protectSaveFolder(parked);
-          await fs.rm(parked, { recursive: true, force: true, maxRetries: 3 });
-        }
-      } catch {
-        remaining.push(item);
-      }
-    }
-    if (remaining.length !== pending.length) await this.update(state => { state.pendingBackupDeletions = remaining; });
-  }
-
-  async deleteBackup(backupId) {
-    this.backupRecord(backupId);
-    const root = await this.backupRoot();
-    const original = path.join(root, backupId);
-    const parked = original + '.deleting';
-    await this.protectSaveFolder(original, parked);
-    const present = await backupDirectoryExists(original);
-    const alreadyParked = await backupDirectoryExists(parked);
-    if (present && alreadyParked) throw new Error('Two folders were found for this backup. Resolve the duplicate before deleting it.');
-    if (present) await fs.rename(original, parked);
-    try {
-      await this.update(state => {
-        state.backups = state.backups.filter(item => item.id !== backupId);
-        if (present || alreadyParked) (state.pendingBackupDeletions ??= []).push({ id: backupId, root });
-      });
-    } catch (error) {
-      if (present) await fs.rename(parked, original);
-      throw error;
-    }
-    await this.retryBackupDeletions().catch(() => {});
-    if (this.state.pendingBackupDeletions?.some(item => item.id === backupId)) {
-      return { remaining: parked };
-    }
-  }
-
-  async restore(backupId) {
-    await this.assertClosed();
-    const backup = this.backupRecord(backupId);
-    const folder = await this.backupFolder(backupId);
-    const root = this.state.settings.saves;
-    if (!root) throw new Error('Choose the Elden Ring save folder in Settings.');
-    const live = new Map((await saveFiles(root)).map(file => [file.toLowerCase(), file]));
-    const targets = await Promise.all(backup.files.map(async relative => {
-      const source = await assertSaveTarget(folder, relative);
-      if (!await exists(source)) throw new Error('A file is missing from this backup.');
-      const current = live.get(relative.toLowerCase()) ?? relative;
-      return { relative, source, target: await assertSaveTarget(root, current) };
-    }));
-    const rollback = await this.makeBackup('Before restore', this.state.active, [...live.values()]);
-    const rollbackFolder = rollback && await this.backupFolder(rollback.id);
-    await this.assertClosed();
-    const written = [];
-    try {
-      for (const { relative, source, target } of targets) {
-        const data = await fs.readFile(source);
-        await fs.mkdir(path.dirname(target), { recursive: true });
-        await atomicWrite(target, data);
-        written.push({ relative, target });
-      }
-    } catch (error) {
-      const recoveries = await Promise.allSettled(written.map(async ({ relative, target }) => {
-        const original = live.get(relative.toLowerCase());
-        if (original) {
-          const data = await fs.readFile(assetPath(rollbackFolder, original));
-          await atomicWrite(target, data);
-        } else {
-          await fs.rm(target);
-        }
-      }));
-      if (recoveries.some(item => item.status === 'rejected')) throw new Error('Restore was interrupted. A before-restore backup is available.');
-      throw error;
-    }
-    return { preserved: Boolean(rollback) };
-  }
-
   async merge(plan, output = null, approval = '') {
     const { game, smithbox } = this.state.settings;
     if (!game) throw new Error('Choose eldenring.exe in Settings.');
@@ -1064,7 +888,7 @@ class Manager {
       await fs.writeFile(profileFile, me3Profile(plan.profile, plan.winners.size || plan.regulations.length ? overlay : null,
         plan.natives, visual ? this.reshadeDll() : null));
       await this.assertClosed();
-      if (plan.profile.autoBackup) await this.makeBackup('Before launch', profileId);
+      if (plan.profile.autoBackup) await this.backups.create('Before launch', profileId);
       await this.update(state => {
         state.lastLog = log;
         if (visual) state.lastVisualLog = path.join(visualBase, 'ReShade.log');

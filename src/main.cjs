@@ -1,9 +1,11 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, screen, shell } = require('electron');
+const { writeFileSync } = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Manager } = require('./manager.cjs');
 const { atomicWrite, detect, exists } = require('./platform.cjs');
 const { assertNoExternalHooks } = require('./reshade.cjs');
+const { restoreWindowState } = require('./window-state.cjs');
 const nexus = require('./nexus.cjs');
 
 app.setName('Ringward');
@@ -136,11 +138,11 @@ function registerActions() {
     if (!me3.version) throw new Error('The installed ME3 version could not be read.');
     return me3.version;
   });
-  register('saves:backup', () => manager.backup(), true);
-  register('saves:restore', id => manager.restore(id), true);
-  register('saves:rename', (id, name) => manager.renameBackup(id, name), true);
-  register('saves:delete', id => manager.deleteBackup(id), true);
-  register('saves:folder', async id => reveal(await manager.backupFolder(id)));
+  register('saves:backup', () => manager.backups.createManual(), true);
+  register('saves:restore', id => manager.backups.restore(id), true);
+  register('saves:rename', (id, name) => manager.backups.rename(id, name), true);
+  register('saves:delete', id => manager.backups.delete(id), true);
+  register('saves:folder', async id => reveal(await manager.backups.folder(id)));
   register('merge:review', id => manager.review(id), true);
   register('merge:build', async (id, approval) => {
     const result = await manager.buildRegulation(id, approval);
@@ -206,7 +208,7 @@ function registerActions() {
   });
   register('open:data', async key => {
     if (key === 'library' || key === 'backups') return reveal(manager.at(key));
-    if (key === 'saves') return reveal(await manager.mainSaveFolder());
+    if (key === 'saves') return reveal(await manager.backups.mainSaveFolder());
     throw new Error('Unknown folder.');
   });
 }
@@ -235,8 +237,11 @@ if (!app.requestSingleInstanceLock()) {
     } catch {}
     manager.onLaunchEnd = code => send('game:ended', code);
     registerActions();
+    const windowStateFile = path.join(root, 'window-state.json');
+    const saved = await fs.readFile(windowStateFile, 'utf8').then(JSON.parse).catch(() => null);
+    const placement = restoreWindowState(saved, screen);
     window = new BrowserWindow({
-      width: 1330, height: 910, minWidth: 830, minHeight: 650,
+      ...placement.options,
       show: false, backgroundColor: '#131714', title: 'Ringward',
       icon: path.join(__dirname, 'ui', 'assets', 'icon.ico'),
       webPreferences: {
@@ -246,7 +251,24 @@ if (!app.requestSingleInstanceLock()) {
     });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
-    window.once('ready-to-show', () => window.show());
+    let maximized = placement.maximized;
+    window.on('maximize', () => { maximized = true; });
+    window.on('unmaximize', () => { if (!window.isMinimized()) maximized = false; });
+    window.on('close', () => {
+      const state = {
+        bounds: window.getNormalBounds(),
+        maximized: window.isMinimized() ? maximized : window.isMaximized()
+      };
+      try {
+        writeFileSync(windowStateFile, JSON.stringify(state));
+      } catch (error) {
+        console.warn('Could not save window placement.', error);
+      }
+    });
+    window.once('ready-to-show', () => {
+      if (placement.maximized) window.maximize();
+      else window.show();
+    });
     await window.loadFile(path.join(__dirname, 'ui', 'index.html'));
   }).catch(error => {
     dialog.showErrorBox('Ringward could not start', error.message);
