@@ -118,7 +118,9 @@ test('unavailable custom storage is not replaced with an empty library and can b
 
 test('startup removes only a marked incomplete transfer and preserves unrelated folders', async t => {
   const { root, source, target, storage } = await setup(t);
-  const stage = await fs.mkdtemp(path.join(root, '.ringward-transfer-'));
+  const parentAlias = path.join(root, 'transfer-parent');
+  await fs.symlink(root, parentAlias, process.platform === 'win32' ? 'junction' : 'dir');
+  const stage = await fs.mkdtemp(path.join(parentAlias, '.ringward-transfer-'));
   const record = { stage, target, token: 'owned-transfer' };
   await fs.writeFile(path.join(stage, '.ringward-transfer.json'), JSON.stringify(record));
   await fs.writeFile(path.join(stage, 'partial.bin'), 'incomplete');
