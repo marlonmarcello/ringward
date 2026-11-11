@@ -128,7 +128,7 @@ function updateStatus() {
   if (release) {
     const label = status === 'ready' ? 'Restart to update' :
       status === 'downloading' ? 'Downloading update…' :
-      status === 'installing' ? 'Installing update…' : 'Update available · v' + html(release.version);
+      status === 'installing' ? 'Starting installer…' : 'Update available · v' + html(release.version);
     return button('updates-open', icon('download') + ' ' + label, 'update-indicator');
   }
   return '<span>' + (status === 'current' ? 'Ringward is up to date' : 'Ringward v' + html(version)) + '</span>';
@@ -161,7 +161,7 @@ function updateControls() {
   } else if (status === 'downloading') {
     message = progress === null ? 'Verifying the GitHub build attestation…' : 'Downloading update…';
   } else if (status === 'installing') {
-    message = 'Installing the update…';
+    message = 'Waiting for Windows to start the installer…';
   } else if (status === 'available' && release.attested) {
     primary = button('updates-download', 'Download update', 'primary');
   } else if (installed && !message) {

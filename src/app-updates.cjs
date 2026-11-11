@@ -1,8 +1,8 @@
 const fs = require('node:fs/promises');
-const { createReadStream, createWriteStream } = require('node:fs');
+const { createWriteStream } = require('node:fs');
 const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { once } = require('node:events');
+const { createInterface } = require('node:readline');
 const path = require('node:path');
 const { Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
@@ -110,10 +110,26 @@ async function verifiedInstallerDigest(bundle, name, cache, verify = verifyProve
   return digest;
 }
 
-async function hashFile(file) {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest('hex');
+async function launchInstaller(file, digest, scope) {
+  const script = await fs.readFile(path.join(__dirname, 'update-installer.ps1'), 'utf8');
+  const command = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const args = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+  const child = spawn(command, args, {
+    detached: true, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true,
+    env: { ...process.env, RINGWARD_UPDATE_FILE: file, RINGWARD_UPDATE_DIGEST: digest, RINGWARD_UPDATE_SCOPE: scope }
+  });
+  const output = createInterface({ input: child.stdout });
+  try {
+    return await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      output.once('line', resolve);
+      output.once('close', () => reject(new Error('Windows could not start the verified installer.')));
+    });
+  } finally {
+    output.close();
+    child.stdout.destroy();
+    child.unref();
+  }
 }
 
 class AppUpdates {
@@ -158,12 +174,18 @@ class AppUpdates {
     if (!this.enabled || this.active || this.status === 'ready') return;
     this.setStatus('checking');
     try {
-      const response = await fetch(previews ? API + '?per_page=100' : API + '/latest', {
+      const options = {
         headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Ringward/' + this.version },
         redirect: 'error', signal: AbortSignal.timeout(12_000)
-      });
-      const payload = !previews && response.status === 404 ? null : await readJson(response, 8 * 1024 ** 2);
-      this.release = selectRelease(previews ? payload : [payload], this.version, previews, Boolean(this.scope));
+      };
+      let newest = null;
+      for (let page = 1; ; page++) {
+        const response = await fetch(API + '?per_page=100&page=' + page, options);
+        const releases = await readJson(response, 8 * 1024 ** 2);
+        newest = selectRelease(releases, newest?.version ?? this.version, previews, Boolean(this.scope)) ?? newest;
+        if (!/<[^>]+>;\s*rel="next"/.test(response.headers.get('link') ?? '')) break;
+      }
+      this.release = newest;
       this.setStatus(this.release ? 'available' : 'current');
     } catch {
       this.setStatus(this.release ? 'available' : 'error', 'Could not check GitHub for updates. Try again later.');
@@ -228,23 +250,24 @@ class AppUpdates {
     if (this.status !== 'ready' || !this.digest) throw new Error('Download and verify the update first.');
     const scope = await installScope(this.executable);
     if (!scope || scope !== this.scope) throw new Error('Ringward’s installation changed. Download the installer from GitHub.');
-    if (await hashFile(this.installer).catch(() => null) !== this.digest) {
+    await assertClosed();
+    this.setStatus('installing');
+    let result;
+    try {
+      result = await launchInstaller(this.installer, this.digest, scope);
+    } catch (error) {
+      console.warn('Ringward update launch failed.', error.message);
+    }
+    if (result === 'started') return true;
+    if (result === 'changed') {
       this.digest = null;
       this.setStatus('available', 'The installer changed after verification. Download the update again.');
-      return false;
+    } else {
+      this.setStatus('ready', result === 'cancelled'
+        ? 'Installation was canceled. Choose Restart and install to try again.'
+        : 'Windows could not start the verified installer. Retry or download it from GitHub.');
     }
-    await assertClosed();
-    const args = ['--updated', '/S', '--force-run', scope];
-    const command = scope === '/allusers' ? path.join(process.resourcesPath, 'elevate.exe') : this.installer;
-    if (scope === '/allusers') {
-      if (!await exists(command)) throw new Error('Windows elevation is unavailable. Download the installer from GitHub.');
-      args.unshift(this.installer);
-    }
-    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
-    await once(child, 'spawn');
-    child.unref();
-    this.setStatus('installing');
-    return true;
+    return false;
   }
 }
 
