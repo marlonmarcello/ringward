@@ -68,12 +68,12 @@ async function refresh() {
   render();
 }
 
-async function perform(work, success) {
+async function perform(work, success, refreshState = true) {
   if (loading) return;
   loading = true;
   try {
     const result = await work();
-    await refresh();
+    if (refreshState) await refresh();
     if (success) toast(typeof success === 'function' ? success(result) : success);
     return result;
   } catch (error) {
@@ -503,6 +503,14 @@ function settings() {
   const logoOptions = [[null, 'Use ME3 setting'], [true, 'Skip logos'], [false, 'Show logos']].map(([value, label]) =>
     '<option value="' + value + '"' + ((paths.skipLogos ?? null) === value ? ' selected' : '') + '>' + label + '</option>').join('');
   return '<div class="stack narrow">' + title('Preferences', 'Settings', 'Connect the game, its loader, and the tools used by your profiles.') +
+    panel('Storage', 'Mods, ReShade packs and settings, profiles, backups, and managed tools.', body(
+      line('Data folder', html(state.storage.directory), button('open-data', 'Open folder', '', data('storage')) +
+        button('storage-change', 'Change location')) +
+      '<p class="muted">A different local folder or drive from Elden Ring is supported. Use a short path, keep the drive connected, and leave room for launch files and backups. ' +
+      'Avoid network and cloud-synced folders. Native DLL mods can have their own location requirements, and custom absolute paths inside mod configs may need updating after a transfer.</p>' +
+      '<p class="muted">Changing location copies and verifies your data, then restarts Ringward. The old copy is kept for recovery. ' +
+      'A small location record, app caches, and update downloads stay in ' + html(state.storage.cache) + '.</p>'
+    )) +
     panel('Game & loader', 'Steam and ME3 paths are detected on first run.', body(
       pathLine('game', 'Elden Ring', 'Choose eldenring.exe') +
       pathLine('me3', 'Mod Engine 3' + (state.tools.me3Version ? ' · ' + html(state.tools.me3Version) : ''), 'Install a portable copy or choose me3.exe.',
@@ -889,6 +897,7 @@ const actions = {
     'Delete mod', () => app.invoke('mods:remove', id), 'Mod deleted from Ringward.'),
   'config-list': configList,
   'choose-path': id => perform(() => app.invoke('settings:pick', id)),
+  'storage-change': () => perform(() => app.invoke('storage:change'), undefined, false),
   detect: () => perform(() => app.invoke('settings:detect'), 'Detection complete.'),
   'me3-version': () => perform(() => app.invoke('settings:me3-version'), version => 'Installed ME3 version ' + version + '.'),
   'install-smithbox': () => perform(() => app.invoke('settings:smithbox'), 'Smithbox 2.2.6 is ready.'),

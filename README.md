@@ -37,6 +37,10 @@
 
 For a standard Steam launch, choose **Vanilla** and unselect any active ReShade preset. **Settings → Game options → Startup logos** controls the logos for ME3 launches.
 
+Choose **Settings → Storage → Change location** to transfer Ringward data into an empty local folder. Ringward verifies the copy, updates its managed tool paths, and restarts. The previous copy is kept for recovery. Mods, profiles, settings, ReShade data, backups, and managed tools use the new folder. App caches, update downloads, and the small `storage-location.json` file stay in `%APPDATA%\Ringward`.
+
+The data folder can be on a different local drive from Elden Ring. Prefer a short path on a local SSD with enough room for launch files and backups, and keep the drive available while playing. Network storage is unsupported by ME3. Cloud sync and offline files can interrupt loading. Individual DLL mods may have additional location requirements, and custom absolute paths inside mod configs may need updating after a transfer. [ME3 profile guidance](https://github.com/garyttierney/me3/blob/main/docs/user-guide/creating-mod-profiles.md)
+
 Ringward checks GitHub at startup and on demand in **Settings → App updates**. The update status below ME3 opens the release notes and download. Installed copies verify the installer against the signed build attestation from Ringward’s release workflow on `main` before offering **Restart and install**. Portable copies open the ZIP download. Windows can still show an unknown-publisher prompt for the installer.
 
 ## Regulation merges

@@ -10,7 +10,7 @@ const channels = new Set([
   'reshade:install', 'reshade:uninstall', 'reshade:select', 'reshade:me3',
   'game:launch', 'game:log', 'nexus:connect', 'nexus:disconnect', 'nexus:mod', 'nexus:download',
   'nexus:register', 'nexus:pending', 'open:external', 'open:data',
-  'updates:preference', 'updates:check', 'updates:download', 'updates:manual', 'updates:install'
+  'updates:preference', 'updates:check', 'updates:download', 'updates:manual', 'updates:install', 'storage:change'
 ]);
 
 contextBridge.exposeInMainWorld('ringward', {
