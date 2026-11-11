@@ -10,8 +10,9 @@ async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ringward-storage-'));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3 }));
   const source = path.join(root, 'old');
-  const target = path.join(root, 'new');
+  let target = path.join(root, 'new');
   await fs.mkdir(target);
+  target = await fs.realpath(target);
   const manager = new Manager(source);
   await manager.init({ saves: path.join(root, 'saves'), game: '', me3: '' });
   const storage = new Storage(source);
@@ -103,8 +104,9 @@ test('unavailable custom storage is not replaced with an empty library and can b
   const { root, source, target, manager, storage } = await setup(t);
   await manager.update(state => { state.settings.me3 = path.join(source, 'tools', 'me3.exe'); });
   await storage.transfer(await storage.prepare(target), async () => {}, () => {});
-  const renamed = path.join(root, 'relocated');
+  let renamed = path.join(root, 'relocated');
   await fs.rename(target, renamed);
+  renamed = await fs.realpath(renamed);
   const reopened = new Storage(source);
   await assert.rejects(reopened.load(), { code: 'ENOENT' });
   await assert.rejects(fs.access(target), { code: 'ENOENT' });
@@ -131,4 +133,15 @@ test('startup removes only a marked incomplete transfer and preserves unrelated 
   await fs.writeFile(storage.journal, JSON.stringify({ ...record, stage: unrelated }));
   assert.equal(await storage.load(), source);
   assert.equal(await fs.readFile(path.join(unrelated, 'keep.txt'), 'utf8'), 'preserved');
+});
+
+test('managed paths are rebased when the source was opened through a path alias', async t => {
+  const { root, source, target, manager } = await setup(t);
+  const alias = path.join(root, 'alias');
+  await fs.symlink(source, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  await manager.update(state => { state.settings.me3 = path.join(alias, 'tools', 'me3.exe'); });
+  const storage = new Storage(alias);
+  await storage.transfer(await storage.prepare(target), async () => {}, () => {});
+  const state = JSON.parse(await fs.readFile(path.join(target, 'manager.json'), 'utf8'));
+  assert.equal(state.settings.me3, path.join(target, 'tools', 'me3.exe'));
 });

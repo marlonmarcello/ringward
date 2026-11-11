@@ -61,20 +61,25 @@ async function readState(root) {
   return state;
 }
 
-function relocateState(state, source, target) {
+function relocateState(state, source, target, sourceAlias = source) {
+  const sources = [...new Set([source, sourceAlias, state.storageRoot].filter(value =>
+    typeof value === 'string' && path.isAbsolute(value)))];
   const next = structuredClone(state);
   next.storageRoot = target;
-  const rebase = value => typeof value === 'string' && path.isAbsolute(value) && within(source, value)
-    ? path.join(target, path.relative(source, value)) : value;
+  const rebase = (value, subfolder = '') => {
+    if (typeof value !== 'string' || !path.isAbsolute(value)) return value;
+    const original = sources.find(root => within(path.join(root, subfolder), value));
+    return original ? path.join(target, path.relative(original, value)) : value;
+  };
   for (const field of ['me3', 'smithbox']) {
-    if (next.settings[field] && within(path.join(source, 'tools'), next.settings[field])) {
-      next.settings[field] = rebase(next.settings[field]);
-    }
+    next.settings[field] = rebase(next.settings[field], 'tools');
   }
   next.lastLog = rebase(next.lastLog);
   if (next.lastVisualLog) next.lastVisualLog = rebase(next.lastVisualLog);
   for (const item of next.pendingBackupDeletions ?? []) {
-    if (item.root && !path.relative(path.join(source, 'backups'), item.root)) item.root = path.join(target, 'backups');
+    if (item.root && sources.some(root => !path.relative(path.join(root, 'backups'), item.root))) {
+      item.root = path.join(target, 'backups');
+    }
   }
   return next;
 }
@@ -140,7 +145,7 @@ class Storage {
     const state = await readState(source);
     if (state.settings.saves) {
       const saves = await fs.realpath(state.settings.saves).catch(() => path.resolve(state.settings.saves));
-      if (within(source, saves) || within(source, path.resolve(state.settings.saves))) {
+      if (within(source, saves) || within(this.root, path.resolve(state.settings.saves))) {
         throw new Error('Your live save folder is inside Ringward’s data folder. Choose an external save folder before transferring.');
       }
     }
@@ -148,7 +153,7 @@ class Storage {
     const bytes = files.reduce((total, file) => total + file.size, 0n);
     const space = await fs.statfs(target, { bigint: true });
     if (space.bavail * space.bsize < bytes + 1024n * 1024n) throw new Error('The destination does not have enough free space for this transfer.');
-    return { source, target, files, bytes };
+    return { source, sourceAlias: this.root, target, files, bytes };
   }
 
   async transfer(plan, assertClosed, progress) {
@@ -176,7 +181,7 @@ class Storage {
         file.relative !== files[index].relative || file.size !== files[index].size || file.modified !== files[index].modified)) {
         throw new Error('Storage files changed during the transfer. Close programs editing these files and try again.');
       }
-      const next = relocateState(await readState(stage), source, target);
+      const next = relocateState(await readState(stage), source, target, plan.sourceAlias);
       await atomicWrite(path.join(stage, 'manager.json'), JSON.stringify(next, null, 2));
       await assertClosed();
       // Removing only an empty directory avoids overwriting anything added to the destination.
