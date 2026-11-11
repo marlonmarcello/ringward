@@ -201,8 +201,11 @@ class Storage {
 
   async clearStage(record) {
     if (!path.isAbsolute(record.stage) || !path.isAbsolute(record.target) ||
-        !path.basename(record.stage).startsWith('.ringward-transfer-') ||
-        path.dirname(record.stage) !== path.dirname(record.target)) return;
+        !path.basename(record.stage).startsWith('.ringward-transfer-')) return;
+    const [stageParent, targetParent] = await Promise.all([
+      fs.realpath(path.dirname(record.stage)), fs.realpath(path.dirname(record.target))
+    ]);
+    if (path.relative(stageParent, targetParent)) return;
     const entry = await metadata(record.stage);
     if (entry?.isDirectory() && !entry.isSymbolicLink()) {
       const saved = JSON.parse(await fs.readFile(path.join(record.stage, TRANSFER_MARKER), 'utf8'));
