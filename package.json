@@ -17,6 +17,10 @@
     "build": "npm run build:merge && electron-builder --win nsis"
   },
   "dependencies": {
+    "@sigstore/bundle": "5.0.1",
+    "@sigstore/tuf": "5.0.1",
+    "@sigstore/verify": "4.1.3",
+    "semver": "7.8.2",
     "yauzl": "3.4.0"
   },
   "devDependencies": {
@@ -49,6 +53,11 @@
       "artifactName": "Ringward-v${version}-setup.${ext}",
       "oneClick": false,
       "perMachine": false
+    }
+  },
+  "overrides": {
+    "@tufjs/models": {
+      "minimatch": "11.0.1"
     }
   }
 }

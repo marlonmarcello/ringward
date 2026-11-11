@@ -21,6 +21,8 @@ const listFilters = { profile: { query: '', status: 'all' }, library: { query: '
 const modStatuses = { all: 'All', enabled: 'Enabled', disabled: 'Disabled' };
 let presetState = null;
 let presetDraft = '';
+let updateState;
+let updateActionError = '';
 
 const profile = () => state.profiles.find(p => p.id === state.active);
 const mod = id => state.mods.find(m => m.id === id);
@@ -62,6 +64,7 @@ function toast(message, error = false) {
 
 async function refresh() {
   state = await app.invoke('state');
+  updateState ??= state.updates;
   render();
 }
 
@@ -105,15 +108,103 @@ function render() {
     '</div><div class="profile-list">' + state.profiles.map(item =>
       button('profile-select', '<span class="dot ' + (item.id === active.id ? 'on' : '') + '"></span><span>' + html(item.name) + '</span>',
         item.id === active.id ? 'selected' : '', data(item.id) + ' title="' + html(item.name) + '"')).join('') +
-    '</div><div class="rail-footer"><span class="dot ' + (state.tools.me3 ? 'on' : '') + '"></span> ' +
-    (state.tools.me3 ? 'ME3 ready' : 'ME3 setup needed') + ' · Windows</div>';
+    '</div><div class="rail-footer"><div><span class="dot ' + (state.tools.me3 ? 'on' : '') + '"></span> ' +
+    (state.tools.me3 ? 'ME3 ready' : 'ME3 setup needed') + ' · Windows</div>' +
+    '<div id="update-status" aria-live="polite">' + updateStatus() + '</div></div>';
   $('topbar').innerHTML = '<div class="trail">Elden Ring <strong>/ &nbsp;' + html(views[view][1]) +
     '</strong></div><div class="actions">' + importZip() +
     button('launch', icon('play') + (state.running ? ' Running' : fullyVanilla() ? ' Launch via Steam' : ' Launch offline'),
       'primary', state.running ? 'disabled' : '') + '</div>';
   $('content').innerHTML = { profile: loadout, library, reshade: visuals, presets, nexus, saves, settings }[view]();
+  if ($('update-controls') && $('dialog').open) $('update-controls').innerHTML = updateControls();
   document.body.classList.remove('starting');
   filterMods();
+}
+
+function updateStatus() {
+  const { enabled, status, release, version } = updateState;
+  if (!enabled) return '';
+  if (status === 'checking') return '<span>Checking for updates…</span>';
+  if (release) {
+    const label = status === 'ready' ? 'Restart to update' :
+      status === 'downloading' ? 'Downloading update…' :
+      status === 'installing' ? 'Starting installer…' : 'Update available · v' + html(release.version);
+    return button('updates-open', icon('download') + ' ' + label, 'update-indicator');
+  }
+  return '<span>' + (status === 'current' ? 'Ringward is up to date' : 'Ringward v' + html(version)) + '</span>';
+}
+
+function updateSettings() {
+  const { enabled, version, status, error, release, previewDefault } = updateState;
+  if (!enabled) return line('Ringward v' + html(version), 'Update checks are available in packaged Windows builds.', '');
+  const active = ['checking', 'downloading', 'installing'].includes(status);
+  const description = error || (status === 'current' ? 'You have the latest version.' :
+    release ? 'Version ' + release.version + ' is available.' : 'Updates are checked on GitHub.');
+  return line('Ringward v' + html(version), html(description),
+    (release && status !== 'checking' ? button('updates-open', 'View update', 'subtle') : '') +
+    button('updates-check', status === 'checking' ? 'Checking…' : 'Check for updates', '', active || status === 'ready' ? 'disabled' : '')) +
+    line('Check at startup', 'Check for a new version when Ringward opens.',
+      checkbox('checkUpdatesAtStartup', 'Enabled', state.settings.checkUpdatesAtStartup !== false)) +
+    line('Preview releases', 'Include public preview builds when checking for updates.',
+      '<label><input type="checkbox" name="updatePreviews"' + ((state.settings.updatePreviews ?? previewDefault) ? ' checked' : '') +
+      (active ? ' disabled' : '') + '> Include previews</label>');
+}
+
+function updateControls() {
+  const { status, progress, error, installed, release } = updateState;
+  if (!release) return '<p>Check for updates in Settings.</p>';
+  let message = updateActionError || error;
+  let primary = '';
+  if (status === 'ready') {
+    if (!message) message = state.running ? 'Close Elden Ring before installing the update.' : 'Download verified. Ringward will close and reopen after installing.';
+    primary = button('updates-install', 'Restart and install', 'primary', state.running ? 'disabled' : '');
+  } else if (status === 'downloading') {
+    message = progress === null ? 'Verifying the GitHub build attestation…' : 'Downloading update…';
+  } else if (status === 'installing') {
+    message = 'Waiting for Windows to start the installer…';
+  } else if (status === 'available' && release.attested) {
+    primary = button('updates-download', 'Download update', 'primary');
+  } else if (installed && !message) {
+    message = 'This release is available as a manual installer download.';
+  }
+  const meter = status === 'downloading' ? '<progress aria-label="Update download"' +
+    (progress === null ? '' : ' max="100" value="' + progress + '"') + '></progress>' : '';
+  return '<div role="status">' + (message ? '<p>' + html(message) + '</p>' : '') + meter + '</div><div class="actions metric">' +
+    primary + button('updates-manual', installed ? (primary ? 'Download manually' : 'Download installer') : 'Download portable ZIP',
+      primary ? 'subtle' : 'primary', status === 'installing' ? 'disabled' : '') + '</div>';
+}
+
+function openUpdate() {
+  const release = updateState.release;
+  if (!release) return;
+  updateActionError = '';
+  dialog('Update to Ringward v' + release.version, '<h3>Release notes</h3>' +
+    (release.notes ? '<pre class="update-notes">' + html(release.notes) + '</pre>' : '<p>GitHub did not include release notes.</p>') +
+    '<div id="update-controls">' + updateControls() + '</div>');
+}
+
+async function updateAction(channel) {
+  updateActionError = '';
+  try {
+    await app.invoke(channel);
+  } catch (error) {
+    updateActionError = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+  }
+  if ($('update-controls') && $('dialog').open) $('update-controls').innerHTML = updateControls();
+  else if (updateActionError) toast(updateActionError, true);
+}
+
+function updateChanged(next) {
+  const before = updateState;
+  updateState = next;
+  if (before?.status === next.status && next.status === 'downloading' && before.progress !== null) {
+    const meter = $('update-controls')?.querySelector('progress');
+    if (meter) meter.value = next.progress;
+    return;
+  }
+  if ($('update-status')) $('update-status').innerHTML = updateStatus();
+  if ($('update-controls') && $('dialog').open) $('update-controls').innerHTML = updateControls();
+  if ($('update-settings')) $('update-settings').innerHTML = updateSettings();
 }
 
 function modFilters(label) {
@@ -431,6 +522,7 @@ function settings() {
       line('ReShade ' + html(state.reshadeVersion), state.tools.reshade ? 'Installed' : 'Setup available in the ReShade tab',
         button('nav', 'Open ReShade', '', data('reshade')))
     )) +
+    panel('App updates', '', '<div class="panel-body" id="update-settings">' + updateSettings() + '</div>') +
     panel('Nexus account', 'Personal API key for this development build. Windows encrypts the saved credential.', body(
       line(state.account ? html(state.account.name) : 'Account', state.account ? (state.account.premium ? 'Premium' : 'Standard') : 'Connect with your personal API key',
         state.account ? button('nexus-disconnect', 'Disconnect') : button('nexus-connect', 'Connect', 'primary')) +
@@ -736,6 +828,11 @@ async function getIncoming() {
 
 const actions = {
   nav: navigate,
+  'updates-open': openUpdate,
+  'updates-check': () => updateAction('updates:check'),
+  'updates-download': () => updateAction('updates:download'),
+  'updates-manual': () => updateAction('updates:manual'),
+  'updates-install': () => updateAction('updates:install'),
   'profile-create': () => profileDialog('create'),
   'profile-duplicate': () => profileDialog('duplicate'),
   'profile-settings': () => profileDialog('settings'),
@@ -886,6 +983,11 @@ document.addEventListener('focusout', event => {
   if (event.target.matches('[data-order-position]')) commitLoadoutPosition(event.target);
 });
 document.addEventListener('change', event => {
+  if (event.target.matches('#update-settings input[type="checkbox"]')) {
+    if (loading) render();
+    else perform(() => app.invoke('updates:preference', event.target.name, event.target.checked));
+    return;
+  }
   if (event.target.matches('[data-skip-logos]')) {
     if (loading) render();
     else perform(() => app.invoke('settings:skip-logos', JSON.parse(event.target.value)), 'Startup logo preference saved.');
@@ -1011,7 +1113,9 @@ if (app) {
     else progress.value = data.fraction;
   });
   app.onIncoming(() => { if (state) getIncoming().catch(error => toast(error.message, true)); });
+  app.onUpdates(updateChanged);
   app.onGameEnded(code => {
+    updateActionError = '';
     refresh().catch(error => toast(error.message, true));
     if (code) toast('ME3 exited with code ' + code + '. Open View log for details.', true);
   });

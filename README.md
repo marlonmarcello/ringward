@@ -37,6 +37,8 @@
 
 For a standard Steam launch, choose **Vanilla** and unselect any active ReShade preset. **Settings → Game options → Startup logos** controls the logos for ME3 launches.
 
+Ringward checks GitHub at startup and on demand in **Settings → App updates**. The update status below ME3 opens the release notes and download. Installed copies verify the installer against the signed build attestation from Ringward’s release workflow on `main` before offering **Restart and install**. Portable copies open the ZIP download. Windows can still show an unknown-publisher prompt for the installer.
+
 ## Regulation merges
 
 Ringward compares each mod’s regulation file against a vanilla baseline of the same version, then applies the differences to the installed game’s regulation. Independent edits combine. If two mods change the same field differently, Ringward shows the conflict before building and the later mod wins once you approve the load order.
@@ -72,7 +74,7 @@ Run `npm run build:unpacked` to package the app into `release/win-unpacked`, or 
 
 1. Run `npm run changeset` on a feature branch and include the resulting note in the PR. Pick the version bump and describe the change from a user's perspective.
 2. After changes merge to `main` and CI passes, Changesets opens or updates **Version Ringward** with the version bump, lockfile, and [changelog](CHANGELOG.md). Review and merge it through the usual branch protection checks.
-3. The version bump on `main` triggers a Windows build. After it passes, GitHub Actions creates the tag and publishes the installer, portable ZIP, SHA-256 checksums for both downloads, and release notes from the changelog. The 0.x builds are development previews.
+3. The version bump on `main` triggers a Windows build. After it passes, GitHub Actions creates the tag and publishes the installer, portable ZIP, SHA-256 checksums, signed build attestation, and release notes from the changelog. The 0.x builds are development previews.
 
 The version PR requires **Allow GitHub Actions to create and approve pull requests** under **Settings → Actions → General → Workflow permissions**. Ringward's workflow creates the PR and leaves review and merge to maintainers. GitHub may require a maintainer to approve workflow runs on bot-created PRs. [Changesets automation](https://github.com/changesets/changesets/blob/main/docs/automating-changesets.md), [GitHub token behavior](https://docs.github.com/en/actions/concepts/security/github_token)
 

@@ -49,6 +49,11 @@ svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width:
 .profile-list { min-height: 0; overflow: auto; display: grid; gap: 3px; align-content: start; }
 .profile-list span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-footer { padding: 16px 9px 0; margin-top: auto; color: var(--muted); font-size: 11px; }
+#update-status { margin-top: 5px; }
+.update-indicator { padding: 4px 6px; margin-left: -6px; font-size: 11px; }
+.update-indicator svg { width: 12px; height: 12px; }
+.update-notes { margin: 8px 0 14px; font: inherit; }
+#update-controls progress { width: 100%; }
 .dot { width: 7px; height: 7px; border-radius: 100%; background: #72806f; display: inline-block; flex: 0 0 auto; }
 .dot.on { background: #a3c891; box-shadow: 0 0 10px #a3c89140; }
 .shell { min-width: 0; }

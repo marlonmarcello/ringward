@@ -9,7 +9,8 @@ const channels = new Set([
   'saves:rename', 'saves:delete', 'saves:folder',
   'reshade:install', 'reshade:uninstall', 'reshade:select', 'reshade:me3',
   'game:launch', 'game:log', 'nexus:connect', 'nexus:disconnect', 'nexus:mod', 'nexus:download',
-  'nexus:register', 'nexus:pending', 'open:external', 'open:data'
+  'nexus:register', 'nexus:pending', 'open:external', 'open:data',
+  'updates:preference', 'updates:check', 'updates:download', 'updates:manual', 'updates:install'
 ]);
 
 contextBridge.exposeInMainWorld('ringward', {
@@ -22,5 +23,6 @@ contextBridge.exposeInMainWorld('ringward', {
   },
   onProgress(callback) { ipcRenderer.on('operation:progress', (_event, data) => callback(data)); },
   onIncoming(callback) { ipcRenderer.on('nexus:incoming', () => callback()); },
+  onUpdates(callback) { ipcRenderer.on('updates:state', (_event, data) => callback(data)); },
   onGameEnded(callback) { ipcRenderer.on('game:ended', (_event, code) => callback(code)); }
 });
