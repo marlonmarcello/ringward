@@ -7,6 +7,7 @@ const { atomicWrite, detect, exists } = require('./platform.cjs');
 const { assertNoExternalHooks } = require('./reshade.cjs');
 const { restoreWindowState } = require('./window-state.cjs');
 const { AppUpdates, previewDefault } = require('./app-updates.cjs');
+const { Storage } = require('./storage.cjs');
 const nexus = require('./nexus.cjs');
 
 app.setName('Ringward');
@@ -24,6 +25,8 @@ const protocolArgs = process.defaultApp ? [path.resolve(__dirname, '..')] : [];
 let window;
 let manager;
 let updates;
+let storage;
+let restarting = false;
 let account = null;
 let credential = '';
 let busy = false;
@@ -47,7 +50,7 @@ function protocolRegistered() {
 
 async function getState() {
   return { ...manager.snapshot(), tools: await manager.toolStatus(), account, protocol: protocolRegistered(),
-    updates: updates.snapshot() };
+    updates: updates.snapshot(), storage: { directory: storage.root, cache: storage.defaultRoot } };
 }
 
 function checkUpdates() {
@@ -59,6 +62,7 @@ function register(name, handler, exclusive = false) {
     if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame) {
       throw new Error('Unknown request source.');
     }
+    if (restarting) throw new Error('Ringward is restarting with the new storage location.');
     if (exclusive && busy) throw new Error('Wait for the current operation to finish.');
     if (exclusive) busy = true;
     try {
@@ -132,6 +136,32 @@ function registerActions() {
   }, true);
   register('settings:detect', async () => manager.autodetect(await detect()), true);
   register('settings:skip-logos', value => manager.setSkipLogos(value), true);
+  register('storage:change', async () => {
+    if (updates.active || updates.status === 'ready') throw new Error('Finish the app update before transferring storage.');
+    await manager.assertClosed();
+    if (Date.now() < steamLaunchUntil) throw new Error('Wait for Elden Ring to finish starting, then close it before transferring storage.');
+    const selected = await dialog.showOpenDialog(window, {
+      title: 'Choose an empty folder for Ringward data',
+      defaultPath: storage.root, properties: ['openDirectory', 'createDirectory']
+    });
+    if (selected.canceled) return;
+    manager.progress('Checking the storage location…');
+    const protectedFolders = [path.dirname(app.getPath('exe')), manager.state.settings.saves];
+    if (manager.state.settings.game) protectedFolders.push(path.dirname(manager.state.settings.game));
+    const plan = await storage.prepare(selected.filePaths[0], protectedFolders);
+    const size = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(Number(plan.bytes) / 1024 ** 3);
+    const decision = await dialog.showMessageBox(window, {
+      type: 'question', title: 'Change storage location', message: 'Transfer Ringward data and restart?',
+      detail: 'From ' + plan.source + '\nTo ' + plan.target + '\n\n' + size + ' GB will be copied and verified. ' +
+        'Your previous files will be kept as a safety copy.\n\nA different local drive from Elden Ring is supported. ' +
+        'Keep the drive connected and avoid network or cloud-synced folders. App caches and update downloads stay in AppData.',
+      buttons: ['Transfer and restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true
+    });
+    if (decision.response !== 0) return;
+    await storage.transfer(plan, () => manager.assertClosed(), (message, fraction) => manager.progress(message, fraction));
+    restarting = true;
+    setImmediate(() => { app.relaunch(); app.quit(); });
+  }, true);
   register('updates:preference', async (key, value) => {
     if (!['checkUpdatesAtStartup', 'updatePreviews'].includes(key) || typeof value !== 'boolean') {
       throw new Error('Unknown update preference.');
@@ -237,10 +267,33 @@ function registerActions() {
     return shell.openExternal(url);
   });
   register('open:data', async key => {
+    if (key === 'storage') return reveal(storage.root);
     if (key === 'library' || key === 'backups') return reveal(manager.at(key));
     if (key === 'saves') return reveal(await manager.backups.mainSaveFolder());
     throw new Error('Unknown folder.');
   });
+}
+
+async function loadStorage() {
+  for (;;) {
+    try {
+      return await storage.load();
+    } catch (error) {
+      const choice = await dialog.showMessageBox({
+        type: 'error', title: 'Ringward storage is unavailable',
+        message: 'Reconnect the storage drive or locate your Ringward data folder.',
+        detail: error.message, buttons: ['Try again', 'Locate folder', 'Quit'], defaultId: 1, cancelId: 2, noLink: true
+      });
+      if (choice.response === 2) return null;
+      if (choice.response === 1) {
+        const selected = await dialog.showOpenDialog({ title: 'Locate Ringward data containing manager.json', properties: ['openDirectory'] });
+        if (!selected.canceled) {
+          try { await storage.useExisting(selected.filePaths[0]); }
+          catch (failure) { dialog.showErrorBox('Could not use this data folder', failure.message); }
+        }
+      }
+    }
+  }
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -254,14 +307,17 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
-    const root = app.getPath('userData');
+    const appData = app.getPath('userData');
+    storage = new Storage(appData);
+    const root = await loadStorage();
+    if (!root) { app.quit(); return; }
     const worker = app.isPackaged
       ? path.join(process.resourcesPath, 'merge', 'Ringward.Merge.exe')
       : path.join(__dirname, '..', '.tools', 'merge', 'Ringward.Merge.exe');
     manager = new Manager(root, worker, data => send('operation:progress', data));
     await manager.init(await detect());
     updates = new AppUpdates({
-      version: app.getVersion(), executable: process.execPath, directory: path.join(root, 'app-updates'),
+      version: app.getVersion(), executable: process.execPath, directory: path.join(appData, 'app-updates'),
       enabled: app.isPackaged && process.platform === 'win32', notify: data => send('updates:state', data)
     });
     await updates.init();
@@ -295,7 +351,7 @@ if (!app.requestSingleInstanceLock()) {
         maximized: window.isMinimized() ? maximized : window.isMaximized()
       };
       try {
-        writeFileSync(windowStateFile, JSON.stringify(state));
+        writeFileSync(path.join(storage.root, 'window-state.json'), JSON.stringify(state));
       } catch (error) {
         console.warn('Could not save window placement.', error);
       }
