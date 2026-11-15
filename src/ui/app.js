@@ -508,7 +508,7 @@ function settings() {
         button('storage-change', 'Change location')) +
       '<p class="muted">A different local folder or drive from Elden Ring is supported. Use a short path, keep the drive connected, and leave room for launch files and backups. ' +
       'Avoid network and cloud-synced folders. Native DLL mods can have their own location requirements, and custom absolute paths inside mod configs may need updating after a transfer.</p>' +
-      '<p class="muted">Changing location copies and verifies your data, then restarts Ringward. The old copy is kept for recovery. ' +
+      '<p class="muted">Changing location copies and verifies your data, then restarts Ringward. Choose whether to keep a safety copy or remove verified original files. ' +
       'A small location record, app caches, and update downloads stay in ' + html(state.storage.cache) + '.</p>'
     )) +
     panel('Game & loader', 'Steam and ME3 paths are detected on first run.', body(

@@ -1,5 +1,5 @@
 const fs = require('node:fs/promises');
-const { createReadStream } = require('node:fs');
+const { createReadStream, constants } = require('node:fs');
 const { createHash, randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { atomicWrite } = require('./platform.cjs');
@@ -175,6 +175,7 @@ class Storage {
         await fs.copyFile(input, output);
         const [original, copied] = await Promise.all([hash(input), hash(output)]);
         if (original !== copied) throw new Error('A copied file could not be verified. Your original data is still active.');
+        file.digest = original;
       }
       const current = await inventory(source);
       if (current.length !== files.length || current.some((file, index) =>
@@ -182,7 +183,9 @@ class Storage {
         throw new Error('Storage files changed during the transfer. Close programs editing these files and try again.');
       }
       const next = relocateState(await readState(stage), source, target, plan.sourceAlias);
-      await atomicWrite(path.join(stage, 'manager.json'), JSON.stringify(next, null, 2));
+      const stateText = JSON.stringify(next, null, 2);
+      await atomicWrite(path.join(stage, 'manager.json'), stateText);
+      files.find(file => file.relative === 'manager.json').targetDigest = createHash('sha256').update(stateText).digest('hex');
       await assertClosed();
       // Removing only an empty directory avoids overwriting anything added to the destination.
       await fs.rmdir(target);
@@ -197,6 +200,81 @@ class Storage {
       else throw new Error('Your original storage is still active. A verified copy is available at ' + target + '.', { cause: error });
       throw error;
     }
+  }
+
+  async removeOriginal(plan, progress) {
+    const { source, target, files } = plan;
+    const active = await fs.realpath(this.root);
+    if (path.relative(active, target) || within(source, active) || within(active, source) ||
+        path.relative(source, await fs.realpath(source))) {
+      throw new Error('The storage locations changed. The previous files were kept.');
+    }
+    const parkedRoot = await fs.mkdtemp(path.join(source, '.ringward-cleanup-'));
+    const manifest = path.join(parkedRoot, 'original-paths.json');
+    await atomicWrite(manifest, JSON.stringify({ source, target, files: files.map(file => file.relative) }, null, 2));
+    const directories = new Set(FOLDERS);
+    let remaining = 0;
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
+      const input = path.join(source, file.relative);
+      const output = path.join(target, file.relative);
+      const parked = path.join(parkedRoot, String(index));
+      let moved = false;
+      try {
+        if (path.isAbsolute(file.relative) || !within(source, input) || input === source ||
+            ![...FOLDERS, ...FILES].includes(file.relative.split(path.sep)[0]) ||
+            !/^[a-f0-9]{64}$/.test(file.digest ?? '')) {
+          throw new Error('Unknown original file.');
+        }
+        const entry = await metadata(input);
+        if (!entry) continue;
+        if (!entry.isFile() || entry.isSymbolicLink() || entry.size !== file.size || entry.mtimeNs !== file.modified ||
+            path.relative(input, await fs.realpath(input)) || path.relative(output, await fs.realpath(output))) {
+          throw new Error('A transferred file changed or was redirected.');
+        }
+        progress('Removing previous copy of ' + file.relative, index / files.length);
+        if (await hash(output) !== (file.targetDigest ?? file.digest)) throw new Error('The destination file changed.');
+        // Verify at a private path before deleting, so a replacement at the original
+        // filename cannot be deleted after verification.
+        await fs.rename(input, parked);
+        moved = true;
+        if (await hash(parked) !== file.digest) throw new Error('The original file changed.');
+        await fs.unlink(parked);
+        moved = false;
+        for (let directory = path.dirname(file.relative); directory !== '.'; directory = path.dirname(directory)) {
+          directories.add(directory);
+        }
+      } catch {
+        remaining++;
+        if (moved) {
+          try {
+            if (path.relative(path.dirname(input), await fs.realpath(path.dirname(input)))) {
+              throw new Error('The original folder was redirected.');
+            }
+            await fs.copyFile(parked, input, constants.COPYFILE_EXCL);
+            await fs.unlink(parked);
+          } catch {
+            // Preserve a parked file if its original path is occupied or unavailable.
+          }
+        }
+      }
+    }
+    for (const relative of [...directories].sort((a, b) => b.length - a.length)) {
+      const folder = path.join(source, relative);
+      const entry = await metadata(folder).catch(() => null);
+      if (entry?.isDirectory() && !entry.isSymbolicLink() &&
+          !path.relative(folder, await fs.realpath(folder).catch(() => ''))) {
+        await fs.rmdir(folder).catch(() => {});
+      }
+    }
+    const recoveryFiles = (await fs.readdir(parkedRoot)).filter(name => name !== 'original-paths.json');
+    if (!recoveryFiles.length) {
+      await fs.unlink(manifest);
+      await fs.rmdir(parkedRoot).catch(() => {});
+    }
+    try { remaining = Math.max(remaining, (await inventory(source)).length); }
+    catch { remaining++; }
+    return { remaining, recovery: recoveryFiles.length ? parkedRoot : null };
   }
 
   async clearStage(record) {

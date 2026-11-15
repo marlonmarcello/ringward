@@ -147,3 +147,79 @@ test('managed paths are rebased when the source was opened through a path alias'
   const state = JSON.parse(await fs.readFile(path.join(target, 'manager.json'), 'utf8'));
   assert.equal(state.settings.me3, path.join(target, 'tools', 'me3.exe'));
 });
+
+test('optional cleanup removes verified originals and keeps the active location and app caches', async t => {
+  const { source, target, storage, write } = await setup(t);
+  await write('library/mod/file.bin', 'asset');
+  await write('reshade/preset.ini', 'visual settings');
+  await write('Cache/file.bin', 'browser cache');
+  const plan = await storage.prepare(target);
+  await assert.rejects(storage.removeOriginal(plan, () => {}), /storage locations changed/);
+  assert.equal(await fs.readFile(path.join(source, 'library/mod/file.bin'), 'utf8'), 'asset');
+  await storage.transfer(plan, async () => {}, () => {});
+  assert.deepEqual(await storage.removeOriginal(plan, () => {}), { remaining: 0, recovery: null });
+  assert.equal(await new Storage(source).load(), target);
+  await assert.rejects(fs.access(path.join(source, 'library')), { code: 'ENOENT' });
+  await assert.rejects(fs.access(path.join(source, 'manager.json')), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(source, 'Cache/file.bin'), 'utf8'), 'browser cache');
+  assert.equal(await fs.readFile(path.join(target, 'library/mod/file.bin'), 'utf8'), 'asset');
+  assert.equal(await fs.readFile(path.join(target, 'reshade/preset.ini'), 'utf8'), 'visual settings');
+  assert.ok((await fs.stat(path.join(target, 'manager.json'))).isFile());
+});
+
+test('cleanup preserves changed originals, new files, and originals whose destination changed', async t => {
+  const { source, target, storage, write } = await setup(t);
+  await write('library/edited.bin', 'before');
+  await write('library/target-changed.bin', 'original');
+  const plan = await storage.prepare(target);
+  await storage.transfer(plan, async () => {}, () => {});
+  await write('library/edited.bin', 'edited after transfer');
+  await write('library/new.bin', 'new file');
+  await fs.writeFile(path.join(target, 'library/target-changed.bin'), 'destination edited');
+  const result = await storage.removeOriginal(plan, () => {});
+  assert.equal(result.remaining, 3);
+  assert.equal(result.recovery, null);
+  assert.equal(await fs.readFile(path.join(source, 'library/edited.bin'), 'utf8'), 'edited after transfer');
+  assert.equal(await fs.readFile(path.join(source, 'library/new.bin'), 'utf8'), 'new file');
+  assert.equal(await fs.readFile(path.join(source, 'library/target-changed.bin'), 'utf8'), 'original');
+  assert.equal(await new Storage(source).load(), target);
+});
+
+test('cleanup restores a file if its bytes change before deletion', async t => {
+  const { source, target, storage, write } = await setup(t);
+  await write('library/file.bin', 'original');
+  const plan = await storage.prepare(target);
+  await storage.transfer(plan, async () => {}, () => {});
+  const rename = fs.rename;
+  t.mock.method(fs, 'rename', async (from, to) => {
+    await rename(from, to);
+    if (from === path.join(plan.source, 'library/file.bin')) await fs.writeFile(to, 'newer edits');
+  });
+  const result = await storage.removeOriginal(plan, () => {});
+  assert.equal(result.remaining, 1);
+  assert.equal(await fs.readFile(path.join(source, 'library/file.bin'), 'utf8'), 'newer edits');
+  assert.equal(await fs.readFile(path.join(target, 'library/file.bin'), 'utf8'), 'original');
+});
+
+test('cleanup preserves a recoverable file if Windows prevents deletion and its original path is occupied', async t => {
+  const { source, target, storage, write } = await setup(t);
+  await write('library/file.bin', 'original');
+  const plan = await storage.prepare(target);
+  await storage.transfer(plan, async () => {}, () => {});
+  const unlink = fs.unlink;
+  t.mock.method(fs, 'unlink', async file => {
+    if (file.includes('.ringward-cleanup-') && path.basename(file) === '0') {
+      await write('library/file.bin', 'a new file at the old path');
+      throw new Error('Windows has the file open');
+    }
+    return unlink(file);
+  });
+  const result = await storage.removeOriginal(plan, () => {});
+  assert.equal(result.remaining, 1);
+  assert.ok(result.recovery);
+  assert.equal(await fs.readFile(path.join(result.recovery, '0'), 'utf8'), 'original');
+  const manifest = JSON.parse(await fs.readFile(path.join(result.recovery, 'original-paths.json'), 'utf8'));
+  assert.equal(manifest.files[0], path.join('library', 'file.bin'));
+  assert.equal(await fs.readFile(path.join(source, 'library/file.bin'), 'utf8'), 'a new file at the old path');
+  assert.equal(await new Storage(source).load(), target);
+});

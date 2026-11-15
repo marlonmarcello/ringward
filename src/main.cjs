@@ -153,13 +153,34 @@ function registerActions() {
     const decision = await dialog.showMessageBox(window, {
       type: 'question', title: 'Change storage location', message: 'Transfer Ringward data and restart?',
       detail: 'From ' + plan.source + '\nTo ' + plan.target + '\n\n' + size + ' GB will be copied and verified. ' +
-        'Your previous files will be kept as a safety copy.\n\nA different local drive from Elden Ring is supported. ' +
+        'Choose whether to keep a safety copy. If unchecked, verified originals will be removed after the new location is active. ' +
+        'Changed or locked files will be kept.\n\nA different local drive from Elden Ring is supported. ' +
         'Keep the drive connected and avoid network or cloud-synced folders. App caches and update downloads stay in AppData.',
+      checkboxLabel: 'Keep a safety copy in the previous location', checkboxChecked: true,
       buttons: ['Transfer and restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true
     });
     if (decision.response !== 0) return;
     await storage.transfer(plan, () => manager.assertClosed(), (message, fraction) => manager.progress(message, fraction));
     restarting = true;
+    if (decision.checkboxChecked === false) {
+      let cleanup;
+      try {
+        await manager.assertClosed();
+        cleanup = await storage.removeOriginal(plan, (message, fraction) => manager.progress(message, fraction));
+      } catch (error) {
+        console.warn('Could not finish removing previous storage files.', error.message);
+        cleanup = { remaining: 1 };
+      }
+      if (cleanup.remaining || cleanup.recovery) {
+        await dialog.showMessageBox(window, {
+          type: 'info', title: 'Storage transferred',
+          message: 'Your new storage is active. Some previous files were kept.',
+          detail: 'Review remaining files in ' + plan.source +
+            (cleanup.recovery ? '\nRecovered files and their original locations are in ' + cleanup.recovery : '') + '.',
+          buttons: ['Restart Ringward']
+        }).catch(error => console.warn('Could not display the storage cleanup notice.', error.message));
+      }
+    }
     setImmediate(() => { app.relaunch(); app.quit(); });
   }, true);
   register('updates:preference', async (key, value) => {
