@@ -116,6 +116,50 @@ test('unavailable custom storage is not replaced with an empty library and can b
   assert.equal(state.settings.me3, path.join(renamed, 'tools', 'me3.exe'));
 });
 
+test('recovery rejects redirected managed folders before changing the location or candidate settings', async t => {
+  const { root, source, target, storage } = await setup(t);
+  await storage.transfer(await storage.prepare(target), async () => {}, () => {});
+  const pointer = await fs.readFile(storage.pointer, 'utf8');
+  const candidate = path.join(root, 'candidate');
+  const manager = new Manager(candidate);
+  await manager.init({ game: '', me3: '', saves: path.join(root, 'saves') });
+  await manager.update(state => {
+    state.storageRoot = source;
+    state.settings.me3 = path.join(source, 'tools', 'me3.exe');
+  });
+  const index = await fs.readFile(manager.db, 'utf8');
+  await fs.rmdir(path.join(candidate, 'library'));
+  await fs.symlink(source, path.join(candidate, 'library'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(storage.useExisting(candidate), /redirected file or folder/);
+  assert.equal(storage.root, target);
+  assert.equal(await fs.readFile(storage.pointer, 'utf8'), pointer);
+  assert.equal(await fs.readFile(manager.db, 'utf8'), index);
+});
+
+test('custom storage startup rejects a redirect introduced inside a managed folder', async t => {
+  const { source, target, storage, write } = await setup(t);
+  await write('library/mod/file.bin', 'asset');
+  await storage.transfer(await storage.prepare(target), async () => {}, () => {});
+  const pointer = await fs.readFile(storage.pointer, 'utf8');
+  const redirect = path.join(target, 'library', 'mod', 'redirect');
+  await fs.symlink(source, redirect, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(new Storage(source).load(), /redirected file or folder/);
+  assert.equal(await fs.readFile(storage.pointer, 'utf8'), pointer);
+  await fs.unlink(redirect);
+  assert.equal(await new Storage(source).load(), target);
+});
+
+test('default storage retains existing support for a redirected backup folder', async t => {
+  const { root, source, storage } = await setup(t);
+  const redirected = path.join(root, 'redirected-backups');
+  await fs.rename(path.join(source, 'backups'), redirected);
+  await fs.symlink(redirected, path.join(source, 'backups'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(await storage.load(), source);
+  const manager = new Manager(source);
+  await manager.init({});
+  assert.equal(await manager.backups.resolvedRoot(), await fs.realpath(redirected));
+});
+
 test('startup removes only a marked incomplete transfer and preserves unrelated folders', async t => {
   const { root, source, target, storage } = await setup(t);
   const parentAlias = path.join(root, 'transfer-parent');

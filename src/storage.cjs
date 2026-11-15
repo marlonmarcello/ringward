@@ -37,13 +37,13 @@ async function inventory(root) {
   async function visit(relative) {
     const entry = await metadata(path.join(root, relative));
     if (!entry) return;
-    if (entry.isSymbolicLink()) throw new Error('Storage contains a redirected file or folder. Remove its redirection before transferring.');
+    if (entry.isSymbolicLink()) throw new Error('Storage contains a redirected file or folder. Choose a folder with local, regular contents.');
     if (entry.isDirectory()) {
       for (const name of (await fs.readdir(path.join(root, relative))).sort()) await visit(path.join(relative, name));
     } else if (entry.isFile()) {
       files.push({ relative, size: entry.size, modified: entry.mtimeNs });
     } else {
-      throw new Error('Storage contains an unsupported file. Transfer canceled.');
+      throw new Error('Storage contains an unsupported file.');
     }
   }
   for (const name of [...FOLDERS, ...FILES]) await visit(name);
@@ -107,6 +107,7 @@ class Storage {
     const root = await fs.realpath(directory);
     localFolder(root);
     const state = await readState(root);
+    await inventory(root);
     if (state.storageRoot && path.isAbsolute(state.storageRoot) && path.relative(state.storageRoot, root)) {
       await this.useExisting(root);
     }
@@ -119,6 +120,7 @@ class Storage {
     const root = await fs.realpath(directory);
     localFolder(root);
     const state = await readState(root);
+    await inventory(root);
     if (state.storageRoot && path.isAbsolute(state.storageRoot) && path.relative(state.storageRoot, root)) {
       await atomicWrite(path.join(root, 'manager.json'), JSON.stringify(relocateState(state, state.storageRoot, root), null, 2));
     }
