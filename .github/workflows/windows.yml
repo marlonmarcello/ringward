@@ -63,10 +63,11 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           $zip = 'Ringward-{0}-win-x64.zip' -f $env:RELEASE_TAG
-          $installers = @(Get-ChildItem -LiteralPath release -Filter '*.exe' -File)
+          $output = (Get-Content package.json -Raw | ConvertFrom-Json).build.directories.output
+          $installers = @(Get-ChildItem -LiteralPath $output -Filter '*.exe' -File)
           if ($installers.Count -ne 1) { throw 'Expected one Windows installer from electron-builder.' }
           $installer = $installers[0]
-          Compress-Archive -LiteralPath release/win-unpacked -DestinationPath "artifacts/$zip"
+          Compress-Archive -LiteralPath (Join-Path $output 'win-unpacked') -DestinationPath "artifacts/$zip"
           Copy-Item -LiteralPath $installer.FullName -Destination artifacts
           $checksums = foreach ($file in @($installer.Name, $zip)) {
             $hash = (Get-FileHash -LiteralPath "artifacts/$file" -Algorithm SHA256).Hash.ToLowerInvariant()

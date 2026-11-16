@@ -13,8 +13,8 @@
     "changeset": "changeset",
     "version:release": "changeset version && npm install --package-lock-only --ignore-scripts",
     "build:merge": "node scripts/build-merge.cjs",
-    "build:unpacked": "npm run build:merge && electron-builder --win --dir",
-    "build": "npm run build:merge && electron-builder --win nsis"
+    "build:unpacked": "npm run build:merge && node scripts/build.cjs --dir",
+    "build": "npm run build:merge && node scripts/build.cjs"
   },
   "dependencies": {
     "@sigstore/bundle": "5.0.1",
@@ -32,7 +32,7 @@
     "appId": "app.ringward.manager",
     "productName": "Ringward",
     "directories": {
-      "output": "release"
+      "output": "release/latest"
     },
     "files": [
       "src/**",

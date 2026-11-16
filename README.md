@@ -72,7 +72,9 @@ npm run build:merge
 npm start
 ```
 
-Run `npm run build:unpacked` to package the app into `release/win-unpacked`, or `npm run build` to create the installer. The merge build fetches pinned Smithbox reference assemblies. Set `SMITHBOX_DIR` to use an extracted Smithbox 2.2.6 release or `RINGWARD_DOTNET` to select a specific SDK executable.
+Run `npm run build:unpacked` to package the app into `release/latest/win-unpacked`, or `npm run build` to create both the unpacked app and installer in `release/latest`. Each successful build replaces that folder, removing older build artifacts. A failed build keeps the previous successful build. Close Ringward before rebuilding if you are running it from that folder.
+
+The merge build fetches pinned Smithbox reference assemblies. Set `SMITHBOX_DIR` to use an extracted Smithbox 2.2.6 release or `RINGWARD_DOTNET` to select a specific SDK executable.
 
 ### Publishing a release
 
