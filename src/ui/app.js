@@ -111,8 +111,11 @@ function render() {
     '</div><div class="rail-footer"><div><span class="dot ' + (state.tools.me3 ? 'on' : '') + '"></span> ' +
     (state.tools.me3 ? 'ME3 ready' : 'ME3 setup needed') + ' · Windows</div>' +
     '<div id="update-status" aria-live="polite">' + updateStatus() + '</div></div>';
-  $('topbar').innerHTML = '<div class="trail">Elden Ring <strong>/ &nbsp;' + html(views[view][1]) +
-    '</strong></div><div class="actions">' + importZip() +
+  const summary = active.immutable ? '<span>Original gameplay</span>' :
+    '<span>' + number(active.mods.filter(item => item.enabled).length) + ' enabled</span>' +
+    '<span>' + number(state.plan.assets) + ' asset files</span><span>' + number(state.plan.nativeCount) + ' native DLLs</span>';
+  $('topbar').innerHTML = '<div class="loadout-summary" role="group" aria-label="Active profile"><strong title="' + html(active.name) + '">' +
+    html(active.name) + '</strong><div class="loadout-counts">' + summary + '</div></div><div class="actions">' + importZip() +
     button('launch', icon('play') + (state.running ? ' Running' : fullyVanilla() ? ' Launch via Steam' : ' Launch offline'),
       'primary', state.running ? 'disabled' : '') + '</div>';
   $('content').innerHTML = { profile: loadout, library, reshade: visuals, presets, nexus, saves, settings }[view]();
@@ -255,13 +258,10 @@ function loadout() {
     const launchText = fullyVanilla()
       ? 'Steam starts Elden Ring with its standard launcher and saves.'
       : 'ME3 starts Elden Ring offline with only your ReShade preset and the game’s standard saves.';
-    return '<section class="hero"><p class="eyebrow">Built-in gameplay profile</p><h1>Vanilla</h1>' +
-      '<p>Original Elden Ring gameplay. Choose ReShade separately to change the visuals.</p></section>' +
+    return '<h1 class="sr-only">Loadout</h1>' +
       '<div class="stack narrow">' + panel('Launch settings', launchText, body(visualLine)) + '</div>';
   }
   const report = state.plan;
-  const enabled = active.mods.filter(item => item.enabled).length;
-  const count = enabled + ' enabled · ' + number(report.assets) + ' asset files · ' + report.nativeCount + ' native DLLs';
   const rows = active.mods.map((entry, index) => {
     const item = mod(entry.id);
     const attr = data(entry.id);
@@ -286,8 +286,7 @@ function loadout() {
       button('move-down', icon('down'), 'icon', attr + ' aria-label="Move down" title="Move down" data-order-edge="' + (index === active.mods.length - 1) + '"') +
       button('mod-setup', 'Manage', '', attr) + '</div></div>';
   }).join('');
-  const empty = '<div class="empty"><h3>This loadout is empty</h3><p>Import a mod or add one from your library.</p><div class="actions">' +
-    importZip() + importFolder() + '</div></div>';
+  const empty = '<div class="empty"><h3>This loadout is empty</h3><p>Drop a mod above or add one from your library.</p></div>';
   const merge = report.regulations.length
     ? line('Regulation changes', report.regulations.length + ' inputs · compared against vanilla',
       button('merge-review', 'Review & build'))
@@ -295,17 +294,17 @@ function loadout() {
   const conflicts = report.assetConflictCount
     ? line('Asset overrides', report.assetConflictCount + ' shared paths · lower rows win', button('asset-conflicts', 'View'))
     : line('Asset overrides', 'No overlapping asset paths', tag('Clear', 'ok'));
-  return '<section class="hero"><img class="sigil" src="./assets/logo.svg" alt=""><p class="eyebrow">Active loadout</p><h1>' +
-    html(active.name) + '</h1><p>' + count + '</p><div class="actions">' +
-    button('profile-settings', icon('settings') + ' Profile settings') + button('profile-duplicate', 'Duplicate', 'subtle') +
-    '</div></section>' + dropzone() + '<div class="columns"><div>' +
+  return '<h1 class="sr-only">Loadout</h1><div class="columns"><div>' +
     panel('Load order', 'Drag the handle or edit a position number. Mods farther down have higher priority.',
-      rows ? modFilters('Search loadout') + rows + noMatches : empty,
-      button('nav', 'Open library ' + icon('arrow'), 'subtle', data('library'))) +
+      dropzone() + (rows ? modFilters('Search loadout') + rows + noMatches : empty),
+      '<div class="actions loadout-actions">' + button('profile-settings', icon('settings'), 'icon compact-profile-settings',
+        'aria-label="Profile settings" title="Profile settings"') +
+      button('nav', 'Open library ' + icon('arrow'), 'subtle', data('library')) + '</div>') +
     '</div><div class="stack">' + panel('Compatibility', '', body(conflicts + merge +
       (report.incomplete.length ? line('Setup required', html(report.incomplete.join(', ')), tag('Review', 'attn')) : ''))) +
-    panel('Launch settings', '', body(
-      visualLine +
+    panel('Profile', '', body(
+      '<div class="profile-actions actions">' + button('profile-settings', icon('settings') + ' Profile settings') +
+      button('profile-duplicate', 'Duplicate', 'subtle') + '</div>' + visualLine +
       line('Matchmaking', 'ME3 offline mode', tag('Offline', 'ok')) +
       line('Save file', active.isolated ? 'Separate for this profile' : 'Game default', tag(active.isolated ? 'Isolated' : 'Shared', active.isolated ? 'ok' : 'attn')) +
       line('Automatic backups', active.autoBackup ? 'Before each launch' : 'Manual backups only', tag(active.autoBackup ? 'On' : 'Off')) +
